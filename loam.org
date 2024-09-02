@@ -1,0 +1,277 @@
+* LOAM: Lurk Ontological Abstract Machine
+~31-bit field elements
+
+Allocator address space: 1 or 2 elements. Call it W.
+External value: 8 elements (digest size). Call it D.
+
+** Tables
+*** id allocation [concrete]
+|-------+---------+----------------------|
+| name  | id      | tag                  |
+|-------+---------+----------------------|
+| width | W       | W                    |
+|-------+---------+----------------------|
+| type  | address | address or constant? |
+|-------+---------+----------------------|
+
+*** attribute assignment [concrete]
+|-------+---------+------------------+---------|
+| name  | id      | attr             | val     |
+|-------+---------+------------------+---------|
+| width | W       | W                | W       |
+|-------+---------+------------------+---------|
+| type  | address | address or const | address |
+|-------+---------+------------------+---------|
+
+*** external value [concrete]
+|-------+---------+----------------|
+| name  | id      | value          |
+|-------+---------+----------------|
+| width | W       | D              |
+|-------+---------+----------------|
+| type  | address | external value |
+|-------+---------+----------------|
+
+*** internal IO (CEK) [concrete?]
+|-------+---------------------+----------+---------+----------|
+| name  | C-t                 | C-v      | E-v     | K-v      |
+|-------+---------------------+----------+---------+----------|
+| width | W                   | W        | W       | W        |
+|-------+---------------------+----------+---------+----------|
+| desc  | expr tag            | expr val | env val | cont val |
+|-------+---------------------+----------+---------+----------|
+| type  | address or constant | address  | address | address  |
+|-------+---------------------+----------+---------+----------|
+
+*** external IO (CEK) [virtual]
+This can be normalized, as a join between external value and internal IO.
+|-------+----------------+----------------+----------------+----------------|
+| name  | C-t            | C-v            | E-v            | K-v            |
+|-------+----------------+----------------+----------------+----------------|
+| width | D              | D              | D              | D              |
+|-------+----------------+----------------+----------------+----------------|
+| desc  | expr tag       | expr val       | env val        | cont val       |
+|-------+----------------+----------------+----------------+----------------|
+| type  | external value | external value | external value | external value |
+|-------+----------------+----------------+----------------+----------------|
+
+** memoset
+- Width is max of concrete tables, plus one for domain-separation/namespacing
+  - tables
+    - allocation: 2W
+    - attributes: 3W
+    - external value: W + D
+    - internal IO: 4W
+  - max tables = W + D
+  - total = W + D + 1
+
+* Schema
+
+** Schema (example)
+|--------+-------+------+----------------|
+| name   | index | attr | representation |
+|--------+-------+------+----------------|
+| cons   | arity | 2    |                |
+| cons   | 0     | car  |                |
+| cons   | 1     | cdr  | (cons car cdr) |
+|--------+-------+------+----------------|
+| car    | arity | 1    |                |
+| car    | type  | t    |                |
+|--------+-------+------+----------------|
+| cdr    | arity | 1    |                |
+| cdr    | type  | t    |                |
+|--------+-------+------+----------------|
+| triple | arity | 3    |                |
+| triple | 0     | a    |                |
+| triple | 1     | b    |                |
+| triple | 2     | c    | (triple a b c) |
+|--------+-------+------+----------------|
+| a      | type  | sym  |                |
+|--------+-------+------+----------------|
+| b      | type  | num  |                |
+|--------+-------+------+----------------|
+| c      | type  | cons |                |
+|--------+-------+------+----------------|
+|        |       |      |                |
+
+** 
+
+=(cons 9 8) -> 1=
+
+|----|
+| id |
+|----|
+|  1 |
+
+
+|----+------+-----|
+| id | attr | val |
+|----+------+-----|
+|  1 | car  |   9 |
+|  1 | cdr  |   8 |
+
+Algorithm, evaluating =(cons 9 8)=:
+#+begin_src lisp
+  (defclass memory ()
+    ((id-counter :initform 0 :accessor memory-id-counter)
+     (schema :initform (make-hash-table) :reader memory-schema)
+     (graph :initform (make-hash-table) :reader memory-graph)))
+
+  (defun allocate (memory)
+    ;; Simplisitc for now. Be smart and memoize later.
+    (prog1 (memory-id-counter memory)
+      (incf (memory-id-counter memory))))
+
+  (defun schema-get (memory name attr)
+    (getf (gethash name (memory-schema memory) )
+          attr))
+
+  (defun schema-set (memory name attr val)
+    (if (gethash name (memory-schema memory) )
+        (setf (getf (gethash name (memory-schema memory) )
+                    attr)
+              val)
+        (setf (gethash name (memory-schema memory))
+              (list attr val)))
+    val)
+
+  (defun graph-get (memory id attr)
+    (getf (gethash id (memory-graph memory) )
+          attr))
+
+  (defun graph-set (memory id attr val)
+    (if (gethash id (memory-graph memory) )
+        (setf (getf (gethash id (memory-graph memory) )
+                    attr)
+              val)
+        (setf (gethash id (memory-graph memory))
+              (list attr val)))
+    val)
+
+  (defun init-schema (memory)
+    (schema-set memory 'cons 'arity 2)
+    (schema-set memory 'cons 0 'car)
+    (schema-set memory 'cons 1 'cdr)
+    (schema-set memory 'car 'arity '1)
+    (schema-set memory 'car 'type t)
+    (schema-set memory 'cdr 'arity '1)
+    (schema-set memory 'cdr 'type t))
+
+  ;; For constructors, query cost is 3 + 4n where n is arity.
+  ;; For projectors, query cost is 2
+  (defun evl (memory expr)
+    (etypecase expr
+      (cons (let* ((head (car expr))
+                   (arity (schema-get memory head 'arity))) ; query
+              (cond
+                ((= arity 1) ; projector
+                 (destructuring-bind (id)
+                     (cdr expr)
+                   (graph-get memory id head))) ; query
+                (t ; constructor
+                 (let ((id (allocate memory))) ; query
+                   (set-attrs memory head id 0 (cdr expr))
+                   id
+                   ))))))) ; query
+
+  ;; Query cost = 4n where n is arity
+  (defun set-attrs (memory constructor id i vals)
+    (when vals
+      (let* ((val (car vals))
+             (attr (schema-get memory constructor i)) ; query
+             (type (schema-get memory attr 'type))) ; query
+        (assert (typep val type))
+
+        (graph-set memory id attr val) ; query
+        (set-attrs memory constructor id (1+ i) (cdr vals))))) ; query
+#+end_src
+
+* Mutable Graph
+- Add timestamp to each triple.
+- For each set of changes (transaction) to an entity, update is checksum (design needed) value such that each
+  attribute's timestamp is positively discoverable.
+- Latest checksum values must be positively discoverable.
+
+|---+---+---+---+----|
+| t | a | b | c | rw |
+|   |   |   |   |    |
+
+- Sort lexicographically, by =(a, b, t)= -- grouping all accesses to =(a, b) -> c= together, sorted by time.
+- When proving, show that when =a= and =b= are the same, =t > t'= (if =t'= is previous, maybe notation should be opposite).
+- when =rw = read=, =c' = c=
+- to simplify these constraints, =rw= should be boolean.
+- 
+
+* Pure Relational Schema
+What physical tables in the lookup layer do we need to represent pure relational data as in Date's =A= language?
+
+** Global
+- =table= is a unique id per low-level physical table.
+- every object lives in some such table
+- =tab-id= is unique within a =table=
+- =id= is globally unique
+- every =table= has an =id= attribute corresponding to =tab-id= in the global table.
+|----+-------+--------|
+| id | table | tab-id |
+|----+-------+--------|
+|  0 |     0 |        |
+|    |       |        |
+
+** Heading
+- key is =(id, attribute)=
+|----+-----------+------|
+| id | attribute | type |
+|----+-----------+------|
+|    |           |      |
+
+** Heading-Arity
+- We need to make =arity= explicit so we can iterate over the =attributes= of a =heading=.
+- The =arity= of a =heading= must exactly match the number of (unique) =attribute= rows for that =heading= in the =Heading= table.
+|---------+-------|
+| heading | arity |
+|---------+-------|
+|         |       |
+
+** Thing-Heading
+- =thing= is a tuple or relation (todo: better name. =object=?)
+- =id= is the =Global= id of a tuple or relation.
+|----+---------|
+| id | heading |
+|----+---------|
+|    |         |
+
+** Tuple
+- every =tuple= has a =heading= (found in =Thing-Heading=).
+- every =tuple= has exactly one =attribute= for each =attribute= of its =heading=.
+- every =attribute= must be of the =type= specified in =Heading=.
+- every =tuple= has an =arity= (via its =heading=).
+- key is =(id, attribute)=
+|----+-----------+-------|
+| id | attribute | value |
+|----+-----------+-------|
+|    |           |       |
+
+** Relation
+- every =relation= has a =heading= (found in =Thing-Heading=).
+- every =relation= is associated with zero or more =tuples=.
+- every =relation= has an =arity= (via its =heading=).
+- every =relation= has a =degree= via =Degree=
+|----+-------|
+| id | tuple |
+|----+-------|
+|    |       |
+
+** Degree
+- We need to make =degree= explicit so we can iterate over the =tuples= of a =relation=.
+- The =degree= of a =relation= must exactly match the number =tuples= associated with it in the =Relation= table.
+|----------+--------|
+| relation | degree |
+|----------+--------|
+|          |        |
+
+** Name
+
+|----+------|
+| id | name |
+|----+------|
+|    |      |
