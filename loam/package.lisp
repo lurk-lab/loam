@@ -55,7 +55,7 @@
   (:use #:common-lisp)
   (:import-from #:macros #:symbolconc)
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
-  (:export #:dual #:dual-value #:meet #:join #:with-duals #:defdual))
+  (:export #:dual #:dual-value #:meet #:join #:with-duals #:defdual #:dual-number #:dual-number-p))
 
 (defpackage datalog
   (:use #:common-lisp)
@@ -63,7 +63,7 @@
   (:import-from #:base #:todo)
   (:import-from #:macros #:display #:symbolconc #:awhen #:it)
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
-  (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals)
+  (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals #:dual-number)
   (:export #:*prototype* #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:dual #:rule #:include #:make-program-instance
            #:includes #:included-programs #:rule-lhs #:rule-rhs #:rule-src #:rules #:<-- #:_ #:== #:run #:init
            #:program #:defprogram #:prototype #:initialize-program #:find-system #:find-relation #:find-prototype

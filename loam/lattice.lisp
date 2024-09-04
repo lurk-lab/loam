@@ -29,8 +29,10 @@
               (typep (dual-value x) ',type)))
        (deftype ,dual-type () '(satisfies ,dual-type-p)))))
 
+(defdual number)
+
 (test defdual
-  (defdual number)
+;  (defdual number)
 
   (is (eql nil (dual-number-p 123)))
   (is (eql nil (dual-number-p (dual "asdf"))))
