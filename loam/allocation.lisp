@@ -156,9 +156,9 @@
     ;; little-endian
     (loop for n from 0 below preimage-elements
           for wide in preimage
+          with idx = 0
           do (loop for j from 0 below 8
                    for elt across (wide-elements wide)
-                   with idx = 0
                    do (loop for k from 0 below 4
                             for byte = (byte 8 (* 8 k))
                             do (setf (aref preimage-bytes idx) (ldb byte elt))
