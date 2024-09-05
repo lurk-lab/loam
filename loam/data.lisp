@@ -47,8 +47,7 @@
 (defgeneric value (tag thing)
   (:method ((tag (eql :nil)) x)
     (assert (null x))
-    ;; Is this actually the right value for Lurk, currently?
-    (widen 0))
+    (value :sym nil))
   (:method ((tag (eql :cons)) (x cons))
     (let ((car (intern-wide-ptr (car x)))
           (cdr (intern-wide-ptr (cdr x))))
@@ -88,7 +87,10 @@
 
 (test intern-wide-ptr
   (let ((*program* (make-program-instance 'test-program)))
-    (is (== (make-wide-ptr (tag-value :nil) (widen 0)) (intern-wide-ptr nil)))
+    (is (== (make-wide-ptr (tag-value :nil)
+                           (wide 3265696281 3773564213 1658540249 4269831010
+                                  2605307679 1922097246 3221902070 1193621601))
+            (intern-wide-ptr nil)))
     (is (== (make-wide-ptr (tag-value :cons)
                            (wide 1971744287 3641459736 3774975494 1609894661
                                  2629299411 3809236520 3595245074 62596448))
@@ -119,6 +121,6 @@
             (intern-wide-ptr (- (expt 2 256) 2))))
 
     (is (== (make-wide-ptr (tag-value :cons)
-                           (wide 3508982854 2318477174 820379700 1535513510
-                                 2128828907 3288824845 2000843403 2393445986))
+                           (wide 804425473 505204341 2810587548 3771856831
+                                 3029221257 2686385941 1603817387 2918411353))
             (intern-wide-ptr `(foo (bar 1) (:baz #\x "monkey") ,(num 123) ,(1- (expt 2 256))))))))
