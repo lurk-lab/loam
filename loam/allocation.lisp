@@ -125,7 +125,8 @@
       (datalog::add-tuple tag-relation (list (tag-address tag) (tag-value tag))))
     ))
 
-(defun hash4 (a b c d) (hash-wide *program* (list a b c d)))
+(defun hash (&rest preimage) (hash-wide *program* preimage))
+(defun hash4 (a b c d) (hash a b c d))
 
 (defgeneric* unhash (hash-cache digest)
   (:method ((h hash-cache) (digest wide))
@@ -260,7 +261,7 @@
                                                                 (d (nth 3 preimage)))))
 
   ;; signal
-  (rule (hash4-rel a b c d (hash4 a b c d)) <-- (hash4 ptr a b c d))
+  (rule (hash4-rel a b c d (hash a b c d)) <-- (hash4 ptr a b c d))
 
   ;; This is required to satisfy usage of ptr-program.
   ;; TODO: Make this enforceable.

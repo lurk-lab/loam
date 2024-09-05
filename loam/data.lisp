@@ -1,10 +1,18 @@
 (declaim (optimize safety))
 
+;; TODO:
+;; - inverse
+;; - :comm
+;; - :fun
+;; - :thunk
+
 (in-package #:data)
 (def-suite* data-suite :in loam:master-suite)
 
 ;; '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk)))
-(setf (symbol-value '+tags+) (allocation-tag-names (make-instance 'lurk-allocation)))
+(deflexical +tags+ (allocation-tag-names (make-instance 'lurk-allocation)))
+
+(deflexical +lurk-built-in-package+ (find-package :lurk.builtin))
 
 ;; bignum is reserved.
 (deftype wide-num () '(unsigned-byte 256))
@@ -15,12 +23,13 @@
 (defstruct (comm (:constructor comm (value)))
   (value 0 :type wide-num))
 
+
 (defun tag (thing)
   (etypecase thing
     (null :nil)
     (cons :cons)
     (keyword :key)
-    (symbol :sym)
+    (symbol (if (eq (symbol-package thing) +lurk-built-in-package+) :builtin :sym))
     (num :num)
     ((unsigned-byte 64) :u64)
     (wide-num :bignum)
@@ -51,25 +60,27 @@
   (:method ((tag (eql :cons)) (x cons))
     (let ((car (intern-wide-ptr (car x)))
           (cdr (intern-wide-ptr (cdr x))))
-      (hash4 (wide-ptr-tag car) (wide-ptr-value car) (wide-ptr-tag cdr) (wide-ptr-value cdr))))
+      (hash (wide-ptr-tag car) (wide-ptr-value car) (wide-ptr-tag cdr) (wide-ptr-value cdr))))
   (:method ((tag (eql :sym)) (s symbol))
     (let ((str-tag-value (tag-value :str)))
       (reduce (lambda (acc s)
-                (hash4 str-tag-value (value :str s) str-tag-value acc))
+                (hash str-tag-value (value :str s) str-tag-value acc))
               (reverse (symbol-path s))
               :initial-value (widen 0))))
+  (:method ((tag (eql :builtin)) (s symbol))
+    (value :sym s))
   (:method ((tag (eql :key)) (s symbol))
     (let ((str-tag-value (tag-value :str))
           (key-tag-value (tag-value :key)))
       (reduce (lambda (acc s)
-                (hash4 key-tag-value (value :str s) str-tag-value acc))
+                (hash key-tag-value (value :str s) str-tag-value acc))
               (reverse (symbol-path s))
               :initial-value (widen 0))))
   (:method ((tag (eql :num)) (x num))
     (widen (num-value x)))
   (:method ((tag (eql :str)) (s string))
     (reduce (lambda (acc c)
-              (hash4 (tag-value :char) (value :char c) (tag-value :str) acc))
+              (hash (tag-value :char) (value :char c) (tag-value :str) acc))
             (reverse s)
             :initial-value (widen 0)))
   (:method ((tag (eql :char)) (c character))
@@ -102,6 +113,10 @@
                            (wide 2124848655 671083439 1461717794 3098496062
                                  1952506637 1679783838 1710627738 3962008700))
             (intern-wide-ptr 'asparagus)))
+    (is (== (make-wide-ptr (tag-value :builtin)
+                           (wide 2370828549 275036126 3725919249 3828056330
+                                 4119081769 2867286066 3909579972 2879896449))
+            (intern-wide-ptr 'lurk:current-env)))
     (is (== (make-wide-ptr (tag-value :num) (widen 987)) (intern-wide-ptr (num 987))))
     (is (== (make-wide-ptr (tag-value :str) (widen 0)) (intern-wide-ptr "")))
     (is (== (make-wide-ptr (tag-value :str) (wide 3915542193 3963547268 1543020646 761117776

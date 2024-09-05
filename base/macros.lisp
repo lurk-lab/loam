@@ -10,7 +10,8 @@
    #:with-captured-bindings
    #:*debug* #:*break-on-display* #:*break-on-debugging* #:*silence-debug-warning* #:*dval*
    #:*dbg #:display #:dbreak #:isetq
-   #:symbolconc))
+   #:symbolconc
+   #:deflexical #:deflexical-var))
 
 (in-package base.macros)
 
@@ -106,3 +107,44 @@
   `(setf (symbol-value ',var) ,val))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; Global Lexicals
+
+;;; I finally decided to use the SYMBOL-VALUE as the location for global lexical
+;;; values (rather than stashing it in a symbol property).
+;;; I did this so that unbound global lexicals will be handled automatically.
+;;; The consequences of locally declaring SPECIAL a symbol which has been conceptually
+;;; proclaimed lexical through DEFLEXICAL or DEFLEXICAL-VAR is undefined for now,
+;;; but it may make sense to expose the implementation, allowing for some interesting
+;;; behavior.  On some level, all this stuff does is suppress the warnings one would
+;;; otherwise receive about unbound variables.
+
+(defmacro define-lexical-variable (symbol &key (value nil value-p) 
+                                            if-unbound documentation)
+  `(progn
+     (eval-when (:compile-toplevel :load-toplevel :execute)
+       (define-symbol-macro ,symbol (symbol-value ',symbol))
+       ,@(when documentation
+           (check-type documentation string)
+           (list `(setf (documentation ',symbol 'variable) ,documentation))))
+     ,@(when value-p
+         (list
+          `(eval-when (:load-toplevel :execute)
+             ,(if if-unbound
+                  `(when (not (boundp ',symbol))
+                     (setq ,symbol ,value))
+                `(setq ,symbol ,value)))))
+     ',symbol))
+
+(defmacro deflexical (variable value &optional documentation)
+  "Defines VARIABLE as a global lexical variable and sets its initial value to VALUE.
+Analogous to DEFPARAMETER."
+  `(define-lexical-variable ,variable :value ,value :documentation ,documentation))
+
+(defmacro deflexical-var (variable &optional (value nil value-p) documentation)
+  "Define VARIABLE as a global lexical variable and if it is unbound,  sets its
+initial value to value.  Analogous to DEFVAR."
+  (if value-p
+      `(define-lexical-variable ,variable :value ,value :if-unbound t 
+                                :documentation ,documentation)
+    `(define-lexical-variable ,variable :documentation ,documentation)))
