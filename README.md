@@ -81,3 +81,7 @@ To run tests:
 ```
 % make test
 ```
+
+## License
+
+MIT or Apache 2.0
