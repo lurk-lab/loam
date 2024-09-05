@@ -16,8 +16,6 @@
 
 (defstruct wide 
   (elements (make-array '(8) :element-type 'element :initial-element 0) :type wide-elements))
-;; (defclass wide ()
-;;   ((elements :initarg :elements :initform (make-array '(8) :element-type 'element :initial-element 0) :type wide-elements :accessor wide-elements)))
 
 (defmethod == ((a wide) (b wide)) (equalp (wide-elements a) (wide-elements b)))
 
@@ -111,7 +109,7 @@
 
 (defclass lurk-allocation (allocation)
   ()
-  (:default-initargs :tag-names '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk)))
+  (:default-initargs :tag-names '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk :builtin :bignum)))
 
 (defmethod initialize-program :after ((a lurk-allocation) &key &allow-other-keys)
   (initialize-tags a (allocation-tag-names a)))
@@ -247,6 +245,7 @@
   ;; Construct output-expr from output-ptr
   (rule (output-expr (make-wide-ptr wide-tag value)) <-- (output-ptr ptr) (ptr-value ptr value) (tag (ptr-tag ptr) wide-tag)))
 
+;; hash-cache takes precedence over program in superclass list
 (defprogram hash4 (hash-cache)
   (include ptr-program)
   (relation (hash4 ptr wide wide wide wide)) ; (ptr a b c d)
