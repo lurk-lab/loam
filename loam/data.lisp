@@ -2,7 +2,6 @@
 
 ;; TODO:
 ;; - inverse
-;; - :comm
 ;; - :fun
 ;; - :thunk
 
@@ -20,8 +19,9 @@
 (defstruct (num (:constructor num (value)))
   (value 0 :type element))
 
-(defstruct (comm (:constructor comm (value)))
-  (value 0 :type wide-num))
+(defstruct (comm (:constructor comm (secret value)))
+  (secret 0)
+  (value 0))
 
 
 (defun tag (thing)
@@ -35,7 +35,8 @@
     (wide-num :bignum)
     (function :fun)
     (string :str)
-    (character :char)))
+    (character :char)
+    (comm :comm)))
 
 ;; size is number of elements, bits is bits per 'element'
 (defun le-elements<- (x &key size (bits 8))
@@ -61,6 +62,10 @@
     (let ((car (intern-wide-ptr (car x)))
           (cdr (intern-wide-ptr (cdr x))))
       (hash (wide-ptr-tag car) (wide-ptr-value car) (wide-ptr-tag cdr) (wide-ptr-value cdr))))
+  (:method ((tag (eql :comm)) (x comm))
+    (let ((secret (value :bignum (comm-secret x)))
+          (value (intern-wide-ptr (comm-value x))))
+      (hash secret (wide-ptr-tag value) (wide-ptr-value value))))
   (:method ((tag (eql :sym)) (s symbol))
     (let ((str-tag-value (tag-value :str)))
       (reduce (lambda (acc s)
@@ -123,6 +128,15 @@
                                                   2609865840 67719049 4263057193 3398353849))
             (intern-wide-ptr "boo")))
     (is (== (make-wide-ptr (tag-value :char) (widen 65)) (intern-wide-ptr #\A)))
+    (is (== (make-wide-ptr (tag-value :comm) (wide 1397905034 3832045063 2843405970 3708064556
+                                                   1931248981 1080144743 1379707257 644801363))
+            (intern-wide-ptr (comm 0 123))))
+    (is (== (make-wide-ptr (tag-value :comm) (wide 236359359 1527390219 2343696523 758167213
+                                                   871965242 1355972474 190653183 4160106812))
+            (intern-wide-ptr (comm 1 123))))
+    (is (== (make-wide-ptr (tag-value :comm) (wide 1728579760 934502999 283557377 3913587264
+                                                   1911438967 440467652 2636934865 1478398737))
+            (intern-wide-ptr (comm 0 '(brass monkey)))))
     (is (== (make-wide-ptr (tag-value :u64) (widen 123)) (intern-wide-ptr 123)))
     (is (== (make-wide-ptr (tag-value :key)
                            (wide 1270829131 4078411283 1745303874 12646417 3698838549
