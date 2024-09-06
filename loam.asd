@@ -18,6 +18,7 @@
                  (:file "lattice")
                  (:file "datalog")
                  (:file "allocation")
+                 (:file "data")
                  )))
 
   :in-order-to ((asdf:test-op (asdf:load-op "loam")))
