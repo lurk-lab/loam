@@ -3,12 +3,11 @@
 ;; TODO:
 ;; - inverse
 ;; - :fun
-;; - :thunk
 
 (in-package #:data)
 (def-suite* data-suite :in loam:master-suite)
 
-;; '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk)))
+;; '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk :builtin :bignum)
 (deflexical +tags+ (allocation-tag-names (make-instance 'lurk-allocation)))
 
 (deflexical +lurk-built-in-package+ (find-package :lurk.builtin))
@@ -19,10 +18,14 @@
 (defstruct (num (:constructor num (value)))
   (value 0 :type element))
 
-(defstruct (comm (:constructor comm (secret value)))
-  (secret 0)
-  (value 0))
+(defstruct (comm (:constructor comm (secret value))) secret value)
 
+(defstruct (env (:constructor env (key value next-env)))
+  (key nil :type symbol)
+  (value nil :type t)
+  (next-env nil :type (or null env)))
+
+(defstruct (thunk (:constructor thunk (body closed-env))) body closed-env)
 
 (defun tag (thing)
   (etypecase thing
@@ -36,7 +39,9 @@
     (function :fun)
     (string :str)
     (character :char)
-    (comm :comm)))
+    (comm :comm)
+    (thunk :thunk)
+    (env :env)))
 
 ;; size is number of elements, bits is bits per 'element'
 (defun le-elements<- (x &key size (bits 8))
@@ -93,7 +98,16 @@
   (:method ((tag (eql :u64)) x)
     (make-wide :elements (le-elements<- x :size 8)))
   (:method ((tag (eql :bignum)) x)
-    (make-wide :elements (le-elements<- x :size 8 :bits 32))))
+    (make-wide :elements (le-elements<- x :size 8 :bits 32)))
+  (:method ((tag (eql :env)) x)
+    (let ((env-value (intern-wide-ptr (env-value x))))
+      (hash (value :sym (env-key x)) (wide-ptr-tag env-value)
+            (wide-ptr-value env-value) (wide-ptr-value (intern-wide-ptr (env-next-env x))))))
+  (:method ((tag (eql :thunk)) x)
+    (let ((body (intern-wide-ptr (thunk-body x)))
+          (closed-env (intern-wide-ptr (thunk-closed-env x))))
+    (hash (wide-ptr-tag body) (wide-ptr-value body)
+          (wide-ptr-tag closed-env) (wide-ptr-value closed-env)))))
 
 (defun intern-wide-ptr (thing)
   (let* ((tag (tag thing))
@@ -151,8 +165,21 @@
                                  #xffffffff #xffffffff #xffffffff #xffffffff))
             ;; check endianness: the first limb should be affected.
             (intern-wide-ptr (- (expt 2 256) 2))))
-
     (is (== (make-wide-ptr (tag-value :cons)
                            (wide 804425473 505204341 2810587548 3771856831
                                  3029221257 2686385941 1603817387 2918411353))
-            (intern-wide-ptr `(foo (bar 1) (:baz #\x "monkey") ,(num 123) ,(1- (expt 2 256))))))))
+            (intern-wide-ptr `(foo (bar 1) (:baz #\x "monkey") ,(num 123) ,(1- (expt 2 256))))))
+    (let* ((env1 (env 'a 123 nil))
+           (env2 (env 'b :xxx env1)))
+      (is (== (make-wide-ptr (tag-value :env)
+                             (wide 1199581480 3616803981 2814820546 221556583
+                                   2944033413 2676282112 3111661552 2030958090))
+              (intern-wide-ptr env1)))
+      (is (== (make-wide-ptr (tag-value :env)
+                             (wide 295914541 1618953587 2521154081 3235537737
+                                   1078277562 2632327043 3266969858 2885389531))
+              (intern-wide-ptr env2)))
+      (is (== (make-wide-ptr (tag-value :thunk)
+                             (wide 1744753148 3513857904 4233239560 3907682457
+                                   1283390581 3923466861 2566567489 3697653370))
+              (intern-wide-ptr (thunk '(we got the thunk) env2)))))))
