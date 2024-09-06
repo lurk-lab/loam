@@ -2,7 +2,7 @@
 
 ;; TODO:
 ;; - inverse
-;; - :fun
+;; - err
 
 (in-package #:data)
 (def-suite* data-suite :in loam:master-suite)
@@ -20,12 +20,14 @@
 
 (defstruct (comm (:constructor comm (secret value))) secret value)
 
+(deftype maybe-env () '(or null env))
 (defstruct (env (:constructor env (key value next-env)))
   (key nil :type symbol)
   (value nil :type t)
-  (next-env nil :type (or null env)))
+  (next-env nil :type maybe-env))
 
-(defstruct (thunk (:constructor thunk (body closed-env))) body closed-env)
+(defstruct (thunk (:constructor thunk (body closed-env))) body (closed-env maybe-env))
+(defstruct (fun (:constructor fun (args body closed-env))) (args nil :type list) body (closed-env maybe-env))
 
 (defun tag (thing)
   (etypecase thing
@@ -41,7 +43,8 @@
     (character :char)
     (comm :comm)
     (thunk :thunk)
-    (env :env)))
+    (env :env)
+    (fun :fun)))
 
 ;; size is number of elements, bits is bits per 'element'
 (defun le-elements<- (x &key size (bits 8))
@@ -107,6 +110,13 @@
     (let ((body (intern-wide-ptr (thunk-body x)))
           (closed-env (intern-wide-ptr (thunk-closed-env x))))
     (hash (wide-ptr-tag body) (wide-ptr-value body)
+          (wide-ptr-tag closed-env) (wide-ptr-value closed-env))))
+  (:method ((tag (eql :fun)) x)
+    (let ((args (intern-wide-ptr (fun-args x)))
+          (body (intern-wide-ptr (fun-body x)))
+          (closed-env (intern-wide-ptr (fun-closed-env x))))
+    (hash (wide-ptr-tag args) (wide-ptr-value args)
+          (wide-ptr-tag body) (wide-ptr-value body)
           (wide-ptr-tag closed-env) (wide-ptr-value closed-env)))))
 
 (defun intern-wide-ptr (thing)
@@ -182,4 +192,8 @@
       (is (== (make-wide-ptr (tag-value :thunk)
                              (wide 1744753148 3513857904 4233239560 3907682457
                                    1283390581 3923466861 2566567489 3697653370))
-              (intern-wide-ptr (thunk '(we got the thunk) env2)))))))
+              (intern-wide-ptr (thunk '(we got the thunk) env2)))))
+    (is (== (make-wide-ptr (tag-value :fun)
+                           (wide 1447306107 92467879 689696902 1727791567
+                                 1019877071 3446651587 2220567674 844771372))
+            (intern-wide-ptr (fun '(a b c) '(+ a (* b c)) nil))))))
