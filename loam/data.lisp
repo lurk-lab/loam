@@ -9,7 +9,9 @@
 ;; '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk :builtin :bignum)
 (deflexical +tags+ (allocation-tag-names (make-instance 'lurk-allocation)))
 
-(deflexical +lurk-built-in-package+ (find-package :lurk.builtin))
+(let ((builtin-package (find-package :lurk.builtin)))
+  (defun* lurk-builtin-p ((s symbol))
+    (eq (symbol-package s) builtin-package)))
 
 ;; bignum is reserved.
 (deftype wide-num () '(unsigned-byte 256))
@@ -33,7 +35,7 @@
     (null :nil)
     (cons :cons)
     (keyword :key)
-    (symbol (if (eq (symbol-package thing) +lurk-built-in-package+) :builtin :sym))
+    (symbol (if (lurk-builtin-p thing) :builtin :sym))
     (num :num)
     ((unsigned-byte 64) :u64)
     (wide-num :bignum)
