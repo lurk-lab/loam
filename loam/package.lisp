@@ -30,8 +30,8 @@
                 #:find-relation #:find-prototype #:relation-counts #:print-relation-counts #:relation-tuples
                 #:relation-tuple-list #:less)
   (:export #:*program* #:element #:ptr #:make-ptr #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
-           #:widen #:wide #:element #:tag #:tag-name #:tag-value #:wide-elements #:lurk-allocation
-           #:allocation-tag-names #:hash-cache #:hash #:+element-bits+))
+           #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:nth-tag #:lurk-allocation
+           #:allocation-tag-names #:hash-cache #:hash #:unhash #:+element-bits+ ))
 
 (defpackage lurk.builtin
   (:export #:atom #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
@@ -56,10 +56,11 @@
   (:use #:common-lisp)
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
   (:import-from #:defstar #:defun* #:defmethod* #:defgeneric* #:->)
-  (:import-from #:macros #:display #:deflexical)
+  (:import-from #:macros #:awhen #:it #:display #:deflexical)
   (:import-from #:datalog #:defprogram #:make-program-instance #:relation)
-  (:import-from #:allocation #:*program* #:lurk-allocation #:allocation-tag-names #:element #:wide #:make-wide #:widen
-                #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value  #:tag-value #:tag #:== #:hash-cache #:hash #:+element-bits+)
+  (:import-from #:allocation #:*program* #:lurk-allocation #:allocation-tag-names #:element #:wide #:wide-elements #:wide-nth
+                #:make-wide #:widen #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:tag-name #:tag-value
+                #:tag #:== #:hash-cache #:hash #:unhash #:+element-bits+ #:nth-tag)
   (:export #:intern-wide-ptr))
 
 (defpackage loam

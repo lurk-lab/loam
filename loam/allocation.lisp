@@ -17,6 +17,9 @@
 (defstruct wide 
   (elements (make-array '(8) :element-type 'element :initial-element 0) :type wide-elements))
 
+(defun wide-nth (n wide)
+  (aref (wide-elements wide) n))
+
 (defmethod == ((a wide) (b wide)) (equalp (wide-elements a) (wide-elements b)))
 
 (defmethod print-object ((obj wide) (s t))
@@ -101,7 +104,7 @@
 
 (defclass allocation ()
   ((allocation-map :initform (make-hash-table) :reader allocation-allocation-map)
-   (tag-names :initarg :tag-names :initform nil :reader allocation-tag-names)
+   (tag-names :initarg :tag-names :initform #() :accessor allocation-tag-names)
    (tags :initform (make-hash-table) :reader allocation-tags)))
 
 (defmethod allocation-tags ((program program))
@@ -109,14 +112,15 @@
 
 (defclass lurk-allocation (allocation)
   ()
-  (:default-initargs :tag-names '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk :builtin :bignum)))
+  (:default-initargs :tag-names #(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk :builtin :bignum)))
 
 (defmethod initialize-program :after ((a lurk-allocation) &key &allow-other-keys)
+  (setf (allocation-tag-names a) (coerce (allocation-tag-names a) 'vector))
   (initialize-tags a (allocation-tag-names a)))
 
 (defmethod initialize-tags ((a allocation) (tag-names t))
   (let ((tags (loop for i from 0
-                    for name in tag-names
+                    for name across tag-names
                     for tag = (make-instance 'tag :name name :address i :value (widen i))
                     collect tag
                     do (setf (gethash name (allocation-tags a)) tag)))
@@ -125,18 +129,26 @@
       (datalog::add-tuple tag-relation (list (tag-address tag) (tag-value tag))))
     ))
 
+(defmethod* (nth-tag -> tag) ((a allocation) (n number))a
+  (gethash (aref (allocation-tag-names a) n) (allocation-tags a)))
+
 (defun hash (&rest preimage) (hash-wide *program* preimage))
 (defun hash4 (a b c d) (hash a b c d))
 
-(defgeneric* unhash (hash-cache digest)
+(defgeneric* unhash-with-cache (hash-cache digest)
   (:method ((h hash-cache) (digest wide))
-    (unhash h (bytes<-wide digest)))
+    (unhash-with-cache h (bytes<-wide digest)))
   (:method ((h hash-cache) ((digest wide-bytes) vector))
     (gethash digest (hash-cache-preimage-cache h))))
 
+(defun unhash (digest &optional preimage-length)
+  (awhen (unhash-with-cache *program* digest)
+    (and (or (not preimage-length) (= (length it) preimage-length))
+         it)))
+
 (defun unhash4 (digest)
-  (awhen (unhash *program* digest)
-    (when (= (length it) 4)
+  (awhen (unhash-with-cache *program* digest)
+    (and (= (length it) 4)
       it)))
 
 (defun wide-list-p (expr) (and (listp expr) (every (lambda (x) (typep x 'wide)) expr)))
@@ -176,7 +188,7 @@
   (let* ((hash-cache (make-instance 'hash-cache))
          (preimage (list (widen 0) (widen 1) (widen 2) (widen 3)))
          (digest (hash-wide hash-cache preimage))
-         (unhashed (unhash hash-cache digest)))
+         (unhashed (unhash-with-cache hash-cache digest)))
     ;; unhash roundtrips
     (is (equalp preimage unhashed))
     ;; hash with cache is reproducible
