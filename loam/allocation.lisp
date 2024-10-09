@@ -406,6 +406,19 @@
 
   ;; The above with MAP-DOUBLE-CONT is equivalent to the following:
 
+  #| Phase 0 that should yield the next two rules when transformed.
+     Alternately, the same source could yield the above two rules (with cont).
+
+  (declare signal (cons a b) -> (cons-rel a b #))
+
+  (rule (map-double ptr double-cons) <--
+    (map-double-input ptr)
+    (cons-rel car cdr ptr)
+    (map-double car double-car)
+    (map-double cdr double-cdr)
+    (signal-cons double-car double-cdr double-cons))
+  |#
+
   ;; signal
   (rule (cons double-car double-cdr) <--
     (map-double-input ptr)
@@ -424,6 +437,50 @@
   ;; These are needed to satisfy PTR-PROGRAM. TODO: enforce.
   ;; real
   (rule (output-ptr output) <-- (input-ptr input) (map-double input output)))
+
+#|
+source langage
+
+[from loam] phase 1: datalog + explicit + implicit
+
+distillation: operation on relation values (memory compaction, etc.)
+
+[from loam] phase 2: same but with witness capture
+
+[loam todo] derivation: remove all signals from loam phase 1
+
+[from loam]: chip specification: datalog
+
+
+Loam input = source language
+Loam output = phase 1, phase 2 annotations, chip specification
+
+phase 0: datalog + explicit signal annotations
+derive phase 1 by adding implicit signals
+|#
+
+;; returns some rules
+(defun synthesize-exlicit-signals (rule signal-definitions)
+  (let ((output-rules nil)
+        (rhs (rule-rhs rule)))
+    (loop for segment in rhs
+          when (eq :predicate (car segment))
+            do (progn :todo)
+          )
+
+    output-rules))
+
+(test synthesize-exlicit-signals
+  (defprogram dummy () (rule (map-double ptr double-cons) <--
+                                        (map-double-input ptr)
+                                        (cons-rel car cdr ptr)
+                                        (map-double car double-car)
+                                        (map-double cdr double-cdr)
+                                        (signal-cons double-car double-cdr double-cons)))
+
+  (let ((input-rule (car (dl:rules (find-prototype 'dummy)))))
+    (synthesize-exlicit-signals input-rule :signal-definitions)))
+
 
 (defun make-cons (a-tag-spec a-wide b-tag-spec b-wide)
   (hash4 (tag-value a-tag-spec) a-wide (tag-value b-tag-spec) b-wide))
