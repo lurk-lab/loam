@@ -378,6 +378,7 @@
   (relation (map-double-input ptr)) ; (input)
   (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
 
+
   ;; real
   (rule (ptr doubled) (map-double ptr doubled) <-- (map-double-input ptr) (when (has-tag-p ptr :num)) (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
 
@@ -459,28 +460,134 @@ phase 0: datalog + explicit signal annotations
 derive phase 1 by adding implicit signals
 |#
 
-;; returns some rules
-(defun synthesize-exlicit-signals (rule signal-definitions)
-  (let ((output-rules nil)
-        (rhs (rule-rhs rule)))
-    (loop for segment in rhs
-          when (eq :predicate (car segment))
-            do (progn :todo)
-          )
+(defun signal-handle-signal-cons (predicate)
+  (let* ((args (predicate-args predicate))
+	 (car (nth 0 args))
+	 (cdr (nth 1 args))
+	 (cons (nth 2 args)))
+    `((cons ,car ,cdr) . (cons-rel ,car ,cdr ,cons))))
 
-    output-rules))
+(defun signal-handle-ingress-cons (predicate)
+  (let* ((args (predicate-args predicate))
+	 (car (nth 0 args))
+	 (cdr (nth 1 args))
+	 (cons (nth 2 args)))
+    `((ingress ,cons) . (cons-rel ,car ,cdr ,cons))))
 
-(test synthesize-exlicit-signals
+(defun signal-handle-map-double (predicate)
+  (let* ((args (predicate-args predicate))
+	 (input (nth 0 args))
+	 (output (nth 1 args)))
+    `((map-double-input ,input) . (map-double ,input ,output))))
+
+(defun signal-handle (predicate)
+  (let ((head (predicate-head predicate)))
+   (if (eql 'signal-cons head)
+      (signal-handle-signal-cons predicate)
+      (if (eql 'ingress-cons head)
+	  (signal-handle-ingress-cons predicate)
+	  (if (eql 'map-double head)
+	      (signal-handle-map-double predicate)
+	      nil)))))
+
+#|
+rule: LHS <-- RHS
+output-rules = NIL
+
+(map-double ptr double-cons)
+<--
+    (cons-rel car cdr ptr) // signal: ingress, handle: cons-rel
+    (map-double car double-car) // signal: map-double-input, handle: map-double
+    (map-double cdr double-cdr) // signal: map-double-input, handle: map-double
+    (cons-rel double-car double-cdr double-cons) // signal: cons, handle: cons-rel
+
+START
+
+(ingress ptr) <-- (map-double-input ptr)
+
+(map-double-input car) <-- (map-double-input) (cons-rel car cdr ptr)
+
+(map-double-input cdr) <--
+    (map-double-input ptr)
+    (cons-rel car cdr ptr)
+    (map-double car doubled-car)
+
+(cons doubled-car doubled-cdr) <--
+    (map-double-input ptr)
+    (cons-rel car cdr ptr)
+    (map-double car doubled-car)
+    (map-double cdr doubled-cdr)
+
+(map-double ptr doubled-cons) <--
+    (map-double-input ptr)
+    (cons-rel car cdr ptr)
+    (map-double car doubled-car)
+    (map-double cdr doubled-cdr)
+    (cons-rel doubled-car doubled-cdr doubled-cons)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+DEFINE synthesize-signal-rules:
+ASSUME: lhs size = 1 and always lhs.head = MAP-DOUBLE
+
+let output-rules = NIL
+let (start-signal, end-handle) = signal-handle(lhs.head)
+let curr-rhs = start-signal
+
+for each relation R on the RHS:
+    if R.head is an explicit signal:
+       let (signal, handle) = signal-handle(R.head)
+       let lhs-signal = (signal ..args)
+       let rhs-handle = (handle ..args output)
+       let new-rule = (lhs-signal <-- curr-rhs)
+       output-rules.push new-rule
+       curr-rhs.push rhs-handle
+
+let final-rule = (end-handle <-- curr-rhs)
+output-rules.push final-rule
+
+return output-rules
+|#
+(defun synthesize-explicit-signals (rule)
+  (let* ((lhs (car (rule-lhs rule)))
+         (rhs (rule-rhs rule))
+	 (start-end  (signal-handle lhs))
+	 (start-signal (car start-end))
+	 (end-handle (cdr start-end))
+	 (curr-rev-rhs `(,start-signal))
+	 (output-rules nil))
+    (progn
+      (loop for segment in rhs do
+	(when (eql :predicate (car segment))
+	  (loop for predicate in (cdr segment)
+		do (let* ((pair (signal-handle predicate))
+			  (lhs-signal (car pair))
+			  (rhs-handle (cdr pair))
+			  (curr-rhs (reverse curr-rev-rhs)) ;; forgive the perf here
+			  (new-rule (display (make-rule `(,lhs-signal <-- ,@curr-rhs)))))
+		     (progn
+		       (push new-rule output-rules)
+		       (push rhs-handle curr-rev-rhs))))))
+      (let* ((curr-rhs (reverse curr-rev-rhs))
+	     (new-rule (display (make-rule `(,end-handle <-- ,@curr-rhs)))))
+	(progn (push new-rule output-rules)
+	       output-rules)))))
+
+(test synthesize-explicit-signals
   (defprogram dummy () (rule (map-double ptr double-cons) <--
-                                        (map-double-input ptr)
-                                        (cons-rel car cdr ptr)
+                                        (ingress-cons car cdr ptr)
                                         (map-double car double-car)
                                         (map-double cdr double-cdr)
                                         (signal-cons double-car double-cdr double-cons)))
 
   (let ((input-rule (car (dl:rules (find-prototype 'dummy)))))
-    (synthesize-exlicit-signals input-rule :signal-definitions)))
+    (synthesize-explicit-signals input-rule)))
 
+
+(defmacro synthesize-rule (&body body)
+  (let* ((rule (make-rule body))
+	 (output-rules (synthesize-explicit-rules rule)))
+    (loop for rule in output-rules do
+      `(add-rule *prototype* ',rule))))
 
 (defun make-cons (a-tag-spec a-wide b-tag-spec b-wide)
   (hash4 (tag-value a-tag-spec) a-wide (tag-value b-tag-spec) b-wide))
@@ -521,3 +628,4 @@ derive phase 1 by adding implicit signals
     )
 ;  (test-alloc-aux 'alloc nil)
   )
+B

@@ -900,6 +900,11 @@ and a list of free variables in FORM."
       (parse-rule-body body)
     `(add-rule *prototype* (make-instance 'rule :lhs ',lhs :rhs ',rhs :plans ',plans :src '(rule ,@body)))))
 
+(defun make-rule (body)
+  (multiple-value-bind (lhs rhs plans)
+      (parse-rule-body body)
+    (make-instance 'rule :lhs lhs :rhs rhs :plans plans :src `(rule ,@body))))
+
 (defmacro include (name &rest options &key require-unique-relations require-unique-rules)
   `(include-prototype ',name ,@options))
 
@@ -967,6 +972,11 @@ and a list of free variables in FORM."
     (test-case "asdf" "fdsa")
     (test-case nil 1)
     ))
+
+(test rule-macro
+  (let* ((lhs '(reachable a b))
+	(parsed (make-rule `(,lhs <-- (edge a b)))))
+    (display (rule-src parsed))))
 
 (test example
   (defprogram example ()
