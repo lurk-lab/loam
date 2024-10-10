@@ -490,6 +490,22 @@ derive phase 1 by adding implicit signals
 	      (signal-handle-map-double predicate)
 	      nil)))))
 
+(defun signal-handle (predicate)
+  (let ((head (predicate-head predicate)))
+    (cond
+      ((eql 'signal-cons head) (signal-handle-signal-cons predicate))
+      ((eql 'ingress-cons head) (signal-handle-ingress-cons predicate))
+      ((eql 'map-double head) (signal-handle-map-double predicate))
+      (t nil))))
+
+(defun signal-handle (predicate)
+  (let ((head (predicate-head predicate)))
+    (case head
+      (signal-cons (signal-handle-signal-cons predicate))
+      (ingress-cons (signal-handle-ingress-cons predicate))
+      (map-double (signal-handle-map-double predicate)))))
+
+
 #|
 rule: LHS <-- RHS
 output-rules = NIL
@@ -569,18 +585,28 @@ return output-rules
 		       (push rhs-handle curr-rev-rhs))))))
       (let* ((curr-rhs (reverse curr-rev-rhs))
 	     (new-rule (display (make-rule `(,end-handle <-- ,@curr-rhs)))))
-	(progn (push new-rule output-rules)
-	       output-rules)))))
+  	(progn (push new-rule output-rules)
+               output-rules)))))
 
 (test synthesize-explicit-signals
   (defprogram dummy () (rule (map-double ptr double-cons) <--
-                                        (ingress-cons car cdr ptr)
-                                        (map-double car double-car)
-                                        (map-double cdr double-cdr)
-                                        (signal-cons double-car double-cdr double-cons)))
+                         (ingress-cons car cdr ptr)
+                         (map-double car double-car)
+                         (map-double cdr double-cdr)
+                         (signal-cons double-car double-cdr double-cons)))
 
-  (let ((input-rule (car (dl:rules (find-prototype 'dummy)))))
-    (synthesize-explicit-signals input-rule)))
+  (defprogram dummy-result (rule (map-double ptr double-cons) <--
+                             (ingress-cons car cdr ptr)
+                             (map-double car double-car)
+                             (map-double cdr double-cdr)
+                             (signal-cons double-car double-cdr double-cons)
+                             (todo :more-rules)
+                             ))
+  (let ((input-rule (car (dl:rules (find-prototype 'dummy))))
+        (output-rules (synthesize-explicit-signals input-rule))
+        (expected-output-rules (dl:rules (find-prototype 'dummy-result))))
+    (is (== expected-output-rules output-rules))
+    ))
 
 
 (defmacro synthesize-rule (&body body)
@@ -628,4 +654,4 @@ return output-rules
     )
 ;  (test-alloc-aux 'alloc nil)
   )
-B
+
