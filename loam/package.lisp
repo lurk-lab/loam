@@ -14,7 +14,7 @@
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
   (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals #:dual-number)
   (:export #:*prototype* #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:dual #:rule #:include #:make-program-instance
-           #:includes #:included-programs #:rule-lhs #:rule-rhs #:predicate-args #:predicate-head #:make-rule #:rule-src #:rules #:<-- #:_ #:== #:run #:init
+           #:includes #:included-programs #:rule-lhs #:rule-rhs #:predicate-args #:predicate-head #:make-rule #:rule-src #:rule-plans #:rules #:rule-equal #:<-- #:_ #:== #:run #:init
            #:program #:defprogram #:prototype #:initialize-program #:find-system #:find-relation #:find-prototype
            #:relation-counts #:print-relation-counts #:relation-tuples #:relation-tuple-list #:less))
 
@@ -25,7 +25,7 @@
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
   (:import-from #:defstar #:defun* #:defmethod* #:defgeneric* #:->)
   (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals)
-  (:import-from #:datalog #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:dual #:rule #:rules #:rule-lhs #:rule-rhs #:predicate-args #:predicate-head #:make-rule #:make-program-instance
+  (:import-from #:datalog #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:dual #:rule #:rule-src #:rule-plans #:rules #:rule-equal #:rule-lhs #:rule-rhs #:predicate-args #:predicate-head #:make-rule #:make-program-instance
                 #:include #:includes #:included-programs #:<-- #:_ #:== #:run #:init #:program #:defprogram #:initialize-program
                 #:find-relation #:find-prototype #:relation-counts #:print-relation-counts #:relation-tuples
                 #:relation-tuple-list #:less)

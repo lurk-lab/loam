@@ -226,10 +226,13 @@
 (defun has-tag-p (ptr tag-spec)
   (eql (ptr-tag ptr) (tag-address tag-spec)))
 
+(defun is-tag-p (tag tag-spec)
+  (eql tag (tag-address tag-spec)))
+
+(defun ptr-wide-tag (ptr) (widen (ptr-tag ptr)))
+
 (defprogram ptr-program (lurk-allocation)
   (relation (tag element wide)) ; (short-tag wide-tag)
-
-  (relation (ptr ptr)) ; (ptr)
 
   ;; It may be confusing that this relation has the same name as the ptr struct's value accessor, since the struct's field is not wide.
   (relation (ptr-value ptr wide)) ; (ptr value)
@@ -244,41 +247,42 @@
   (relation (ingress ptr)) ; (ptr)
   (relation (egress ptr)) ; (ptr)
 
-  ;; signal
-  (rule (ptr ptr) <-- (alloc tag value) (let ((ptr (make-ptr tag (aref (wide-elements value) 0))))))
-
   ;; Ingress path
-  (rule (alloc tag (wide-ptr-value wide-ptr)) <-- (input-expr wide-ptr) (tag tag (wide-ptr-tag wide-ptr)))
+  (rule (alloc tag (wide-ptr-value wide-ptr)) <--
+    (input-expr wide-ptr) (tag tag (wide-ptr-tag wide-ptr)))
 
-  (rule (ingress ptr) (input-ptr ptr) <-- (input-expr wide-ptr) (ptr-value ptr (wide-ptr-value wide-ptr)) (tag (ptr-tag ptr) (wide-ptr-tag wide-ptr)))
+  (rule (ingress ptr) (input-ptr ptr) <--
+    (input-expr wide-ptr)
+    (ptr-value ptr (wide-ptr-value wide-ptr))
+    (tag (ptr-tag ptr) (wide-ptr-tag wide-ptr)))
 
   ;; Egress
   (rule (egress ptr) <-- (output-ptr ptr))
 
   ;; Construct output-expr from output-ptr
-  (rule (output-expr (make-wide-ptr wide-tag value)) <-- (output-ptr ptr) (ptr-value ptr value) (tag (ptr-tag ptr) wide-tag)))
+  (rule (output-expr (make-wide-ptr wide-tag value)) <--
+    (output-ptr ptr)
+    (ptr-value ptr value)
+    (tag (ptr-tag ptr) wide-tag)))
 
 ;; hash-cache takes precedence over program in superclass list
 (defprogram hash4 (hash-cache)
   (include ptr-program)
-  (relation (hash4 ptr wide wide wide wide)) ; (ptr a b c d)
-  (relation (unhash4 element wide)) ; (tag digest)
+  (relation (hash4 wide wide wide wide)) ; (a b c d)
+  (relation (unhash4 wide)) ; (digest)
   (relation (hash4-rel wide wide wide wide wide)) ; (a b c d digest)
 
   ;; signal
-  (rule (hash4-rel a b c d digest) <-- (unhash4 _ digest) (let ((preimage (unhash4 digest))
-                                                                (a (nth 0 preimage))
-                                                                (b (nth 1 preimage))
-                                                                (c (nth 2 preimage))
-                                                                (d (nth 3 preimage)))))
+  (rule (hash4-rel a b c d digest) <--
+    (unhash4 digest)
+    (let ((preimage (unhash4 digest))
+          (a (nth 0 preimage))
+          (b (nth 1 preimage))
+          (c (nth 2 preimage))
+          (d (nth 3 preimage)))))
 
   ;; signal
-  (rule (hash4-rel a b c d (hash a b c d)) <-- (hash4 ptr a b c d))
-
-  ;; This is required to satisfy usage of ptr-program.
-  ;; TODO: Make this enforceable.
-  ;; signal
-  (rule (ptr-value ptr digest) <-- (hash4 ptr a b c d) (hash4-rel a b c d digest)))
+  (rule (hash4-rel a b c d (hash a b c d)) <-- (hash4 a b c d)))
 
 (defprogram cons-mem ()
   (include ptr-program)
@@ -289,8 +293,6 @@
   ;;   (car ptr) (cdr ptr))
   ; signal
   (relation (cons ptr ptr)) ; (car cdr)
-  (relation (car ptr ptr)) ; (cons car)
-  (relation (cdr ptr ptr)) ; (cons cdr)
 
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
   ;;; Memory
@@ -302,73 +304,70 @@
   (lattice (cons-digest-mem wide dual-element)) ; (digest addr)
   (lattice (cons-mem ptr ptr dual-element)) ; (car cdr addr)
 
-  ;; Populating alloc(...) triggers allocation in cons_digest_mem.
-  ;; signal
-  (rule (cons-digest-mem value  (alloc :cons (dual 0))) <-- (alloc (tag-address :cons) value))
+  ;; Populating alloc(...) triggers allocation in cons-digest-mem.
+  (rule (cons-digest-mem value  (alloc :cons (dual 0))) <--
+    (alloc (tag-address :cons) value))
 
-  ;; Convert addr to ptr and register ptr relations.
-  ;; real
-  (rule (ptr ptr) (ptr-value ptr value) <-- (cons-digest-mem value addr) (let ((ptr (ptr :cons (dual-value addr))))))
-
-  ;; signal
+  ;; Populating cons(...) triggers allocation in cons-mem.
   (rule (cons-mem car cdr (alloc :cons (dual 0))) <-- (cons car cdr))
 
-  ;; real
+  ;; Populate cons-digest-mem if a cons in cons-mem has been hashed in hash4-rel.
   (rule (cons-digest-mem digest addr) <--
     (cons-mem car cdr addr)
     (ptr-value car car-value) (ptr-value cdr cdr-value)
     (tag (ptr-tag car) car-tag) (tag (ptr-tag cdr) cdr-tag)
     (hash4-rel car-tag car-value cdr-tag cdr-value digest))
 
-  ;; real
-  (rule (cons-rel car cdr (ptr :cons (dual-value addr))) <-- (cons-mem car cdr addr))
+  ;; Other way around.
+  (rule (cons-mem car cdr addr) <--
+    (cons-digest-mem digest addr)
+    (hash4-rel car-tag car-value cdr-tag cdr-value digest)
+    (ptr-value car car-value) (ptr-value cdr cdr-value)
+    (when (and (== (ptr-wide-tag car) car-tag) (== (ptr-wide-tag cdr) cdr-tag))))
+  
+  ;; Register a cons value.
+  (rule (ptr-value ptr value) <--
+    (cons-digest-mem value addr) (let ((ptr (ptr :cons (dual-value addr))))))
 
-  ;; real
-  (rule (ptr cons) (car cons car) (cdr cons cdr) <-- (cons-rel car cdr cons))
+  ;; Register a cons relation.
+  (rule (cons-rel car cdr ptr) <--
+    (cons-mem car cdr addr)
+    (let ((ptr (ptr :cons (dual-value addr))))))
 
-  ;; Note, all of these (when (has-tag-p ...)) could also be expressed by 'inlining' tags and performing a match on constant data, which will perform better
-  ;; with indices and a smart-enough planner.
   ;; signal
-  (rule (unhash4 (tag-address :cons) digest) <-- (ingress ptr) (when (has-tag-p ptr :cons)) (ptr-value ptr digest))
+  (rule (unhash4 digest) <--
+    (ingress ptr) (when (has-tag-p ptr :cons)) (ptr-value ptr digest))
 
   ;; signal
   (rule (alloc car-tag car-value) (alloc cdr-tag cdr-value) <--
-    (unhash4 (tag-address :cons) digest)
+    (unhash4 digest)
     (hash4-rel wide-car-tag car-value wide-cdr-tag cdr-value digest)
     (tag car-tag wide-car-tag)
     (tag cdr-tag wide-cdr-tag))
 
-  ;; real
-  (rule (cons-rel car cdr (ptr :cons addr)) (cons-mem car cdr addr) <--
-    (hash4-rel wide-car-tag car-value wide-cdr-tag cdr-value digest)
-    (cons-digest-mem digest addr)
-    (tag (ptr-tag car) wide-car-tag) (tag (ptr-tag cdr) wide-cdr-tag)
-    (ptr-value car car-value) (ptr-value cdr cdr-value))
-
-  ;; real (but maybe unnecessary)
-  (rule (ptr cons) (car cons car) (cdr cons cdr) <-- (cons-rel car cdr cons))
-
   ;; signal
-  (rule (hash4 cons car-tag car-value cdr-tag cdr-value) <--
+  (rule (hash4 car-tag car-value cdr-tag cdr-value) <--
     (egress cons)
     (cons-rel car cdr cons)
     (tag (ptr-tag car) car-tag) (tag (ptr-tag cdr) cdr-tag)
     (ptr-value car car-value) (ptr-value cdr cdr-value))
 
-  ;; real
-  (rule (ptr car) (ptr cdr) <--
-    (hash4-rel wide-car-tag car-value wide-cdr-tag cdr-value _)
-    (tag (ptr-tag car) wide-car-tag) (tag (ptr-tag cdr) wide-cdr-tag)
-    (ptr-value car car-value) (ptr-value cdr cdr-value))
-
   ;; TODO: Similarly, this should be required somehow.
   ;; signal
-  (rule (egress car) (egress cdr) <-- (egress cons) (cons-rel car cdr cons)))
+  (rule (egress car) (egress cdr) <--
+    (egress cons) (cons-rel car cdr cons)))
 
 (defprogram immediate-num ()
   (include ptr-program)
   ;; real
-  (rule (ptr-value ptr (widen (ptr-value ptr))) <-- (ptr ptr) (when (has-tag-p ptr :num))))
+  (rule (ptr-value ptr value) <--
+    (alloc tag value)
+    (when (is-tag-p tag :num))
+    (let ((ptr (ptr :num (wide-nth 0 value))))))
+
+  (rule (ptr-value ptr value) <--
+    (egress ptr) (when (has-tag-p ptr :num))
+    (let ((value (widen (ptr-value ptr)))))))
 
 (defprogram map-double ()
   (include ptr-program)
@@ -378,47 +377,22 @@
   (relation (map-double-input ptr)) ; (input)
   (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
 
-
   ;; real
-  (rule (ptr doubled) (map-double ptr doubled) <-- (map-double-input ptr) (when (has-tag-p ptr :num)) (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
+  (rule (map-double ptr doubled) <--
+    (map-double-input ptr) (when (has-tag-p ptr :num))
+    (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
 
   ; signal
-  (rule (map-double-input ptr) <-- (input-ptr ptr))
+  (rule (map-double-input ptr) <--
+    (input-ptr ptr))
 
   ; signal
-  (rule (ingress ptr) <-- (map-double-input ptr));
+  (rule (ingress ptr) <--
+    (map-double-input ptr))
 
   ; signal
-  (rule (map-double-input car) (map-double-input cdr) <-- (map-double-input cons) (cons-rel car cdr cons))
-
-  (relation (map-double-cont ptr ptr ptr))
-
-  ;; These rules are equivalent to the next two and cheaper for the first program.
-  ;; But the second 
-  ;; (rule (map-double-cont ptr double-car double-cdr) (cons double-car double-cdr) <--
-  ;;   (map-double-input ptr)
-  ;;   (cons-rel car cdr ptr)
-  ;;   (map-double car double-car)
-  ;;   (map-double cdr double-cdr))
-
-  ;; (rule (map-double ptr double-cons) <--
-  ;;   (map-double-cont ptr double-car double-cdr)
-  ;;   (cons-rel double-car double-cdr double-cons))
-
-  ;; The above with MAP-DOUBLE-CONT is equivalent to the following:
-
-  #| Phase 0 that should yield the next two rules when transformed.
-     Alternately, the same source could yield the above two rules (with cont).
-
-  (declare signal (cons a b) -> (cons-rel a b #))
-
-  (rule (map-double ptr double-cons) <--
-    (map-double-input ptr)
-    (cons-rel car cdr ptr)
-    (map-double car double-car)
-    (map-double cdr double-cdr)
-    (signal-cons double-car double-cdr double-cons))
-  |#
+  (rule (map-double-input car) (map-double-input cdr) <--
+    (map-double-input cons) (cons-rel car cdr cons))
 
   ;; signal
   (rule (cons double-car double-cdr) <--
@@ -436,7 +410,6 @@
     (cons-rel double-car double-cdr double-cons))
 
   ;; These are needed to satisfy PTR-PROGRAM. TODO: enforce.
-  ;; real
   (rule (output-ptr output) <-- (input-ptr input) (map-double input output)))
 
 #|
@@ -459,161 +432,169 @@ Loam output = phase 1, phase 2 annotations, chip specification
 phase 0: datalog + explicit signal annotations
 derive phase 1 by adding implicit signals
 |#
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun signal-handle-signal-cons (predicate)
+    (let* ((args (predicate-args predicate))
+	   (car (nth 0 args))
+	   (cdr (nth 1 args))
+	   (cons (nth 2 args)))
+      `((cons ,car ,cdr) . (cons-rel ,car ,cdr ,cons))))
 
-(defun signal-handle-signal-cons (predicate)
-  (let* ((args (predicate-args predicate))
-	 (car (nth 0 args))
-	 (cdr (nth 1 args))
-	 (cons (nth 2 args)))
-    `((cons ,car ,cdr) . (cons-rel ,car ,cdr ,cons))))
+  (defun signal-handle-ingress-cons (predicate)
+    (let* ((args (predicate-args predicate))
+	   (car (nth 0 args))
+	   (cdr (nth 1 args))
+	   (cons (nth 2 args)))
+      `((ingress ,cons) . (cons-rel ,car ,cdr ,cons))))
 
-(defun signal-handle-ingress-cons (predicate)
-  (let* ((args (predicate-args predicate))
-	 (car (nth 0 args))
-	 (cdr (nth 1 args))
-	 (cons (nth 2 args)))
-    `((ingress ,cons) . (cons-rel ,car ,cdr ,cons))))
+  (defun signal-handle-map-double (predicate)
+    (let* ((args (predicate-args predicate))
+	   (input (nth 0 args))
+	   (output (nth 1 args)))
+      `((map-double-input ,input) . (map-double ,input ,output))))
 
-(defun signal-handle-map-double (predicate)
-  (let* ((args (predicate-args predicate))
-	 (input (nth 0 args))
-	 (output (nth 1 args)))
-    `((map-double-input ,input) . (map-double ,input ,output))))
+  (defun signal-handle (predicate)
+    (let ((head (predicate-head predicate)))
+      (if (eql 'signal-cons head)
+	  (signal-handle-signal-cons predicate)
+	  (if (eql 'ingress-cons head)
+	      (signal-handle-ingress-cons predicate)
+	      (if (eql 'map-double head)
+		  (signal-handle-map-double predicate)
+		  nil)))))
 
-(defun signal-handle (predicate)
-  (let ((head (predicate-head predicate)))
-   (if (eql 'signal-cons head)
-      (signal-handle-signal-cons predicate)
-      (if (eql 'ingress-cons head)
-	  (signal-handle-ingress-cons predicate)
-	  (if (eql 'map-double head)
-	      (signal-handle-map-double predicate)
-	      nil)))))
+  (defun signal-handle (predicate)
+    (let ((head (predicate-head predicate)))
+      (cond
+	((eql 'signal-cons head) (signal-handle-signal-cons predicate))
+	((eql 'ingress-cons head) (signal-handle-ingress-cons predicate))
+	((eql 'map-double head) (signal-handle-map-double predicate))
+	(t nil))))
 
-(defun signal-handle (predicate)
-  (let ((head (predicate-head predicate)))
-    (cond
-      ((eql 'signal-cons head) (signal-handle-signal-cons predicate))
-      ((eql 'ingress-cons head) (signal-handle-ingress-cons predicate))
-      ((eql 'map-double head) (signal-handle-map-double predicate))
-      (t nil))))
-
-(defun signal-handle (predicate)
-  (let ((head (predicate-head predicate)))
-    (case head
-      (signal-cons (signal-handle-signal-cons predicate))
-      (ingress-cons (signal-handle-ingress-cons predicate))
-      (map-double (signal-handle-map-double predicate)))))
-
-
-#|
-rule: LHS <-- RHS
-output-rules = NIL
-
-(map-double ptr double-cons)
-<--
-    (cons-rel car cdr ptr) // signal: ingress, handle: cons-rel
-    (map-double car double-car) // signal: map-double-input, handle: map-double
-    (map-double cdr double-cdr) // signal: map-double-input, handle: map-double
-    (cons-rel double-car double-cdr double-cons) // signal: cons, handle: cons-rel
-
-START
-
-(ingress ptr) <-- (map-double-input ptr)
-
-(map-double-input car) <-- (map-double-input) (cons-rel car cdr ptr)
-
-(map-double-input cdr) <--
-    (map-double-input ptr)
-    (cons-rel car cdr ptr)
-    (map-double car doubled-car)
-
-(cons doubled-car doubled-cdr) <--
-    (map-double-input ptr)
-    (cons-rel car cdr ptr)
-    (map-double car doubled-car)
-    (map-double cdr doubled-cdr)
-
-(map-double ptr doubled-cons) <--
-    (map-double-input ptr)
-    (cons-rel car cdr ptr)
-    (map-double car doubled-car)
-    (map-double cdr doubled-cdr)
-    (cons-rel doubled-car doubled-cdr doubled-cons)
-
+  #|
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-DEFINE synthesize-signal-rules:
-ASSUME: lhs size = 1 and always lhs.head = MAP-DOUBLE
+  DEFINE synthesize-signal-rules:
+  ASSUME: lhs size = 1 and always lhs.head = MAP-DOUBLE
 
-let output-rules = NIL
-let (start-signal, end-handle) = signal-handle(lhs.head)
-let curr-rhs = start-signal
+  let output-rules = NIL
+  let (start-signal, end-handle) = signal-handle(lhs.head)
+  let curr-rhs = start-signal
 
-for each relation R on the RHS:
-    if R.head is an explicit signal:
-       let (signal, handle) = signal-handle(R.head)
-       let lhs-signal = (signal ..args)
-       let rhs-handle = (handle ..args output)
-       let new-rule = (lhs-signal <-- curr-rhs)
-       output-rules.push new-rule
-       curr-rhs.push rhs-handle
+  for each relation R on the RHS:
+  if R.head is an explicit signal:
+  let (signal, handle) = signal-handle(R.head)
+  let lhs-signal = (signal ..args)
+  let rhs-handle = (handle ..args output)
+  let new-rule = (lhs-signal <-- curr-rhs)
+  output-rules.push new-rule
+  curr-rhs.push rhs-handle
 
-let final-rule = (end-handle <-- curr-rhs)
-output-rules.push final-rule
+  let final-rule = (end-handle <-- curr-rhs)
+  output-rules.push final-rule
 
-return output-rules
-|#
-(defun synthesize-explicit-signals (rule)
-  (let* ((lhs (car (rule-lhs rule)))
-         (rhs (rule-rhs rule))
-	 (start-end  (signal-handle lhs))
-	 (start-signal (car start-end))
-	 (end-handle (cdr start-end))
-	 (curr-rev-rhs `(,start-signal))
-	 (output-rules nil))
-    (progn
-      (loop for segment in rhs do
-	(when (eql :predicate (car segment))
-	  (loop for predicate in (cdr segment)
-		do (let* ((pair (signal-handle predicate))
-			  (lhs-signal (car pair))
-			  (rhs-handle (cdr pair))
-			  (curr-rhs (reverse curr-rev-rhs)) ;; forgive the perf here
-			  (new-rule (display (make-rule `(,lhs-signal <-- ,@curr-rhs)))))
-		     (progn
-		       (push new-rule output-rules)
-		       (push rhs-handle curr-rev-rhs))))))
-      (let* ((curr-rhs (reverse curr-rev-rhs))
-	     (new-rule (display (make-rule `(,end-handle <-- ,@curr-rhs)))))
-  	(progn (push new-rule output-rules)
-               output-rules)))))
+  return output-rules
+  |#
+  (defun synthesize-explicit-signals (rule)
+    (let* ((lhs (car (rule-lhs rule)))
+           (rhs (rule-rhs rule))
+	   (start-end  (signal-handle lhs))
+	   (start-signal (car start-end))
+	   (end-handle (cdr start-end))
+	   (curr-rev-rhs `(,start-signal))
+	   (output-rules nil))
+      (progn
+	(loop for segment in rhs do
+	  (when (eql :predicate (car segment))
+	    (loop for predicate in (cdr segment)
+		  do (let* ((pair (signal-handle predicate))
+			    (lhs-signal (car pair))
+			    (rhs-handle (cdr pair))
+			    (curr-rhs (reverse curr-rev-rhs)) ;; forgive the perf here
+			    (new-rule (make-rule `(,lhs-signal <-- ,@curr-rhs))))
+		       (progn
+			 (push new-rule output-rules)
+			 (push rhs-handle curr-rev-rhs))))))
+	(let* ((curr-rhs (reverse curr-rev-rhs))
+	       (new-rule (make-rule `(,end-handle <-- ,@curr-rhs))))
+  	  (progn (push new-rule output-rules)
+		 (reverse output-rules))))))
+
+  (defmacro synthesize-rule (&body body)
+    (let* ((rule (make-rule body))
+           (rules (mapcar #'rule-src (synthesize-explicit-signals rule))))
+      `(progn ,@rules))))
+
+(defprogram syn-map-double ()
+  (include ptr-program)
+  (include cons-mem)
+  (include immediate-num)
+
+  (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
+  (relation (map-double-input ptr)) ; TODO: automatically add this during synthesis?
+
+  #|
+  ;; TODO: Reading this looks a bit funny, since ptr doesn't look like its bound
+  ;; on the RHS, but we will have to improve the syntax at a later time.
+  ;; For now synthesize-rule should produce an acceptably correct result.
+  (synthesize-rule (map-double ptr doubled) <--
+    (when (has-tag-p ptr :num))
+    (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
+  |#
+
+  ;; TODO: We just use the manual rule.
+  (rule (map-double ptr doubled) <--
+    (map-double-input ptr) (when (has-tag-p ptr :num))
+    (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
+
+  ;; We manually glue up to the input/output.
+  ;; TODO: This actually fits nicely into the synthesis framework, with a rule like this:
+  ;;     (rule (input-output ptr output))
+  ;; where signal = input-ptr and handle = output-ptr.
+  (rule (map-double-input ptr) <-- (input-ptr ptr))
+  (rule (output-ptr output) <-- (input-ptr ptr) (map-double ptr output))
+  
+  (synthesize-rule (map-double ptr double-cons) <--
+    (ingress-cons car cdr ptr)
+    (map-double car double-car)
+    (map-double cdr double-cdr)
+    (signal-cons double-car double-cdr double-cons)))
 
 (test synthesize-explicit-signals
-  (defprogram dummy () (rule (map-double ptr double-cons) <--
-                         (ingress-cons car cdr ptr)
-                         (map-double car double-car)
-                         (map-double cdr double-cdr)
-                         (signal-cons double-car double-cdr double-cons)))
+  (defprogram syn-dummy ()
+    (synthesize-rule (map-double ptr double-cons) <--
+      (ingress-cons car cdr ptr)
+      (map-double car double-car)
+      (map-double cdr double-cdr)
+      (signal-cons double-car double-cdr double-cons)))
 
-  (defprogram dummy-result (rule (map-double ptr double-cons) <--
-                             (ingress-cons car cdr ptr)
-                             (map-double car double-car)
-                             (map-double cdr double-cdr)
-                             (signal-cons double-car double-cdr double-cons)
-                             (todo :more-rules)
-                             ))
-  (let ((input-rule (car (dl:rules (find-prototype 'dummy))))
-        (output-rules (synthesize-explicit-signals input-rule))
-        (expected-output-rules (dl:rules (find-prototype 'dummy-result))))
-    (is (== expected-output-rules output-rules))
-    ))
+  (defprogram dummy-result ()
+    (rule (ingress ptr) <-- (map-double-input ptr))
 
+    (rule (map-double-input car) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr))
 
-(defmacro synthesize-rule (&body body)
-  (let* ((rule (make-rule body))
-	 (output-rules (synthesize-explicit-rules rule)))
-    (loop for rule in output-rules do
-      `(add-rule *prototype* ',rule))))
+    (rule (map-double-input cdr) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car double-car))
+
+    (rule (cons double-car double-cdr) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car double-car)
+      (map-double cdr double-cdr))
+
+    (rule (map-double ptr double-cons) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car double-car)
+      (map-double cdr double-cdr)
+      (cons-rel double-car double-cdr double-cons)))
+  
+  (let* ((syn-output-rules (dl:rules (find-prototype 'syn-dummy)))
+         (expected-output-rules (dl:rules (find-prototype 'dummy-result))))
+    (is (== expected-output-rules syn-output-rules))))
 
 (defun make-cons (a-tag-spec a-wide b-tag-spec b-wide)
   (hash4 (tag-value a-tag-spec) a-wide (tag-value b-tag-spec) b-wide))
@@ -642,8 +623,7 @@ return output-rules
          ;(c2-4_4-8 (make-cons :cons c2-4 :cons c4-8))
          (c2-4_4-6 (make-cons :cons c2-4 :cons c4-6))
          (expected-output (wide-ptr :cons c2-4_4-6)))
-    (setq asdf program)
-    (init program `(input-expr ((,(wide-ptr :cons c1-2_2-3)))))
+    (init program `(input-expr ((,(wide-ptr :cons 1-2_2-3)))))
 
     (run program)
 
@@ -651,7 +631,26 @@ return output-rules
 
     (is (== `((,expected-output )) (relation-tuple-list (find-relation program 'output-expr))))
     (is (not (cons-mem-contiguous-p program)))
-    )
-;  (test-alloc-aux 'alloc nil)
-  )
+    ))
 
+(test syn-allocation
+  (let* ((program (make-program-instance 'syn-map-double))
+         (*program* program) ;; This is needed for MAKE-CONS.
+         (c1-2 (make-cons :num (widen 1) :num (widen 2))) ; (1 . 2)
+         (c2-3 (make-cons :num (widen 2) :num (widen 3))) ; (2 . 3)
+         (c2-4 (make-cons :num (widen 2) :num (widen 4))) ; (2 . 4)
+         (c4-6 (make-cons :num (widen 4) :num (widen 6))) ; (4 . 6)
+         (c4-8 (make-cons :num (widen 4) :num (widen 8))) ; (4 . 8)
+         ;(c1-2_2-4 (make-cons :cons c1-2 :cons c2-4))
+         (c1-2_2-3 (make-cons :cons c1-2 :cons c2-3))
+         ;(c2-4_4-8 (make-cons :cons c2-4 :cons c4-8))
+         (c2-4_4-6 (make-cons :cons c2-4 :cons c4-6))
+         (expected-output (wide-ptr :cons c2-4_4-6)))
+    (init program `(input-expr ((,(wide-ptr :cons c1-2_2-3)))))
+    (run program)
+
+    ;(datalog::print-relation-counts program t)
+
+    (is (== `((,expected-output )) (relation-tuple-list (find-relation program 'output-expr))))
+    (is (not (cons-mem-contiguous-p program)))
+    ))

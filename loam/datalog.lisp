@@ -69,6 +69,9 @@
   (print-unreadable-object (obj s)
     (format s "~a" (spec obj))))
 
+(defun rule-equal (a b)
+  (equalp (rule-src a) (rule-src b)))
+
 (defgeneric rhs-relations (x)
   (:method ((rule rule))
     (let ((segments (rule-rhs rule)))
@@ -199,6 +202,14 @@
     (setf (rule-program rule) program
           (rule-src-program rule) src-program)
     rule))
+
+(defun make-rule (body)
+  (multiple-value-bind (lhs rhs plans)
+      (parse-rule-body body)
+    (make-instance 'rule :lhs lhs :rhs rhs :plans plans :src `(rule ,@body))))
+
+(defmethod == ((a rule) (b rule))
+  (equalp (rule-src a) (rule-src b)))
 
 (defmethod add-rule ((r rules-mixin) (rule rule))
   (push rule (rules r)))
@@ -476,7 +487,7 @@ and a list of free variables in FORM."
     ((head :initarg :head :reader predicate-head)
      (args :initarg :args :reader predicate-args)
      (src :initarg :src :reader predicate-src)))
-
+  
   (defmethod make-load-form ((predicate predicate) &optional environment)
     (make-load-form-saving-slots predicate :slot-names '(head args src) :environment environment))
 
@@ -836,7 +847,11 @@ and a list of free variables in FORM."
   (:method ((a t) (b t))
     (equalp a b))
   (:method ((a array) (b array))
-    (equalp a b)))
+    (equalp a b))
+  ;; This works, but I have no idea if it is a good idea or not.
+  (:method ((a cons) (b cons))
+    (and (== (car a) (car b))
+	 (== (cdr a) (cdr b)))))
 
 (defun ignored-var-p (var)
   (eql #\_ (char (symbol-name var) 0)))
@@ -887,23 +902,14 @@ and a list of free variables in FORM."
 (defun find-prototype (name)
   (get name '%prototype))
 
-
 (defmacro relation ((name &body attribute-types))
   `(add-relation *prototype* (make-instance 'relation :name ',name :attribute-types ',attribute-types)))
 
 (defmacro lattice ((name &body attribute-types))
   `(add-lattice *prototype* (make-instance 'lattice :name ',name :attribute-types ',attribute-types)))
 
-
 (defmacro rule (&body body)
-  (multiple-value-bind (lhs rhs plans)
-      (parse-rule-body body)
-    `(add-rule *prototype* (make-instance 'rule :lhs ',lhs :rhs ',rhs :plans ',plans :src '(rule ,@body)))))
-
-(defun make-rule (body)
-  (multiple-value-bind (lhs rhs plans)
-      (parse-rule-body body)
-    (make-instance 'rule :lhs lhs :rhs rhs :plans plans :src `(rule ,@body))))
+    `(add-rule *prototype* (make-rule ',body)))
 
 (defmacro include (name &rest options &key require-unique-relations require-unique-rules)
   `(include-prototype ',name ,@options))
@@ -970,13 +976,19 @@ and a list of free variables in FORM."
     (test-case '(1) '(1 2))
     (test-case '(1 2) '(2))
     (test-case "asdf" "fdsa")
-    (test-case nil 1)
-    ))
+    (test-case nil 1)))
 
-(test rule-macro
-  (let* ((lhs '(reachable a b))
-	(parsed (make-rule `(,lhs <-- (edge a b)))))
-    (display (rule-src parsed))))
+(test rule-equal
+  (defprogram rule1 ()
+    (rule (x a) <-- (y b))
+    (rule (x c) <-- (y d)))
+  (defprogram rule2 ()
+    (rule (x a) <-- (y b))
+    (rule (x c) <-- (y d)))
+
+  (let ((rule1 (dl:rules (find-prototype 'rule1)))
+	(rule2 (dl:rules (find-prototype 'rule2))))
+    (is (every #'rule-equal rule1 rule2))))
 
 (test example
   (defprogram example ()
