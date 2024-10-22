@@ -14,7 +14,7 @@
 (deftype wide-elements () `(vector element ,+wide-size+))
 (deftype wide-bytes () `(vector (unsigned-byte 8) ,(* +wide-size+ +element-bytes+)))
 
-(defstruct wide 
+(defstruct wide
   (elements (make-array '(8) :element-type 'element :initial-element 0) :type wide-elements))
 
 (defun wide-nth (n wide)
@@ -324,7 +324,7 @@
     (hash4-rel car-tag car-value cdr-tag cdr-value digest)
     (ptr-value car car-value) (ptr-value cdr cdr-value)
     (when (and (== (ptr-wide-tag car) car-tag) (== (ptr-wide-tag cdr) cdr-tag))))
-  
+
   ;; Register a cons value.
   (rule (ptr-value ptr value) <--
     (cons-digest-mem value addr) (let ((ptr (ptr :cons (dual-value addr))))))
@@ -431,7 +431,7 @@
     (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
 
   (synthesize-rule (input-output input output) <-- (signal-map-double input output))
-  
+
   (synthesize-rule (signal-map-double ptr double-cons) <--
     (ingress-cons car cdr ptr)
     (signal-map-double car double-car)
@@ -450,7 +450,7 @@
     (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
     (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
 
-    
+
     (synthesize-rule (signal-map-double ptr double-cons) <--
       (ingress-cons car cdr ptr)
       (signal-map-double car double-car)
@@ -482,7 +482,7 @@
       (map-double car double-car)
       (map-double cdr double-cdr)
       (cons-rel double-car double-cdr double-cons)))
-  
+
   (let* ((syn-output-rules (dl:rules (find-prototype 'syn-dummy)))
          (expected-output-rules (dl:rules (find-prototype 'dummy-result))))
     (is (== expected-output-rules syn-output-rules))))

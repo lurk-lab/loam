@@ -61,6 +61,9 @@
   ((name :initarg :name :type symbol :reader signal-relation-name)
    (dispatcher :initarg :dispatcher :type function :reader signal-relation-dispatcher)))
 
+(defmethod dispatch ((r signal-relation) (predicate-form t))
+  (funcall (signal-relation-dispatcher r) predicate-form))
+
 (defclass rule ()
   ((lhs :initarg :lhs :reader rule-lhs)
    (rhs :initarg :rhs :reader rule-rhs)
@@ -469,7 +472,7 @@
               (mapcar (lambda (x) (slot-value x 'hu.dwim.walker::name))
                       (remove-if-not (lambda (elt)
                                        (typep elt 'hu.dwim.walker:free-variable-reference-form))
-                                     (hu.dwim.walker:collect-variable-references 
+                                     (hu.dwim.walker:collect-variable-references
                                       (hu.dwim.walker:walk-form
                                        form))))))
       free-variables))
@@ -502,7 +505,7 @@ and a list of free variables in FORM."
     ((head :initarg :head :reader predicate-head)
      (args :initarg :args :reader predicate-args)
      (src :initarg :src :reader predicate-src)))
-  
+
   (defmethod make-load-form ((predicate predicate) &optional environment)
     (make-load-form-saving-slots predicate :slot-names '(head args src) :environment environment))
 
@@ -716,16 +719,15 @@ and a list of free variables in FORM."
                           :segments (nreverse segments)))))))
 
   (defun handle-signal (prototype predicate)
-    (let* ((signal-relation (getf (signal-relations prototype) (car predicate)))
-	   (dispatcher (signal-relation-dispatcher signal-relation)))
-      (funcall dispatcher predicate)))
+    (let* ((signal-relation (getf (signal-relations prototype) (car predicate))))
+      (dispatch signal-relation predicate)))
 
   (defun segment-kind (item)
     (case (car item)
       (let :rule-binding)
       (when :restriction)
       (t :predicate)))
-  
+
   ;; This function takes a unsynthesized rule and synthesizes it.
   ;;
   ;; For every signal-relation in the rule, we process it and generate the signal relation and handle relation
@@ -751,7 +753,7 @@ and a list of free variables in FORM."
 	    finally (let* ((final-rhs (cons start-signal curr-rhs-tail))
 			   (final-rule (make-rule `(,end-handle <-- ,@final-rhs))))
 		      (return `(,@output-rules ,final-rule))))))
-  
+
   (defun synthesize-explicit-signals (rule)
     (let* ((lhs (car (rule-lhs rule))) ;; FIXME: Why is it okay to discard the cdr of the lhs?
            (rhs (rule-rhs rule))
