@@ -412,163 +412,54 @@
   ;; These are needed to satisfy PTR-PROGRAM. TODO: enforce.
   (rule (output-ptr output) <-- (input-ptr input) (map-double input output)))
 
-#|
-source langage
-
-[from loam] phase 1: datalog + explicit + implicit
-
-distillation: operation on relation values (memory compaction, etc.)
-
-[from loam] phase 2: same but with witness capture
-
-[loam todo] derivation: remove all signals from loam phase 1
-
-[from loam]: chip specification: datalog
-
-
-Loam input = source language
-Loam output = phase 1, phase 2 annotations, chip specification
-
-phase 0: datalog + explicit signal annotations
-derive phase 1 by adding implicit signals
-|#
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun signal-handle-signal-cons (predicate)
-    (let* ((args (predicate-args predicate))
-	   (car (nth 0 args))
-	   (cdr (nth 1 args))
-	   (cons (nth 2 args)))
-      `((cons ,car ,cdr) . (cons-rel ,car ,cdr ,cons))))
-
-  (defun signal-handle-ingress-cons (predicate)
-    (let* ((args (predicate-args predicate))
-	   (car (nth 0 args))
-	   (cdr (nth 1 args))
-	   (cons (nth 2 args)))
-      `((ingress ,cons) . (cons-rel ,car ,cdr ,cons))))
-
-  (defun signal-handle-map-double (predicate)
-    (let* ((args (predicate-args predicate))
-	   (input (nth 0 args))
-	   (output (nth 1 args)))
-      `((map-double-input ,input) . (map-double ,input ,output))))
-
-  (defun signal-handle (predicate)
-    (let ((head (predicate-head predicate)))
-      (if (eql 'signal-cons head)
-	  (signal-handle-signal-cons predicate)
-	  (if (eql 'ingress-cons head)
-	      (signal-handle-ingress-cons predicate)
-	      (if (eql 'map-double head)
-		  (signal-handle-map-double predicate)
-		  nil)))))
-
-  (defun signal-handle (predicate)
-    (let ((head (predicate-head predicate)))
-      (cond
-	((eql 'signal-cons head) (signal-handle-signal-cons predicate))
-	((eql 'ingress-cons head) (signal-handle-ingress-cons predicate))
-	((eql 'map-double head) (signal-handle-map-double predicate))
-	(t nil))))
-
-  #|
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-  DEFINE synthesize-signal-rules:
-  ASSUME: lhs size = 1 and always lhs.head = MAP-DOUBLE
-
-  let output-rules = NIL
-  let (start-signal, end-handle) = signal-handle(lhs.head)
-  let curr-rhs = start-signal
-
-  for each relation R on the RHS:
-  if R.head is an explicit signal:
-  let (signal, handle) = signal-handle(R.head)
-  let lhs-signal = (signal ..args)
-  let rhs-handle = (handle ..args output)
-  let new-rule = (lhs-signal <-- curr-rhs)
-  output-rules.push new-rule
-  curr-rhs.push rhs-handle
-
-  let final-rule = (end-handle <-- curr-rhs)
-  output-rules.push final-rule
-
-  return output-rules
-  |#
-  (defun synthesize-explicit-signals (rule)
-    (let* ((lhs (car (rule-lhs rule)))
-           (rhs (rule-rhs rule))
-	   (start-end  (signal-handle lhs))
-	   (start-signal (car start-end))
-	   (end-handle (cdr start-end))
-	   (curr-rev-rhs `(,start-signal))
-	   (output-rules nil))
-      (progn
-	(loop for segment in rhs do
-	  (when (eql :predicate (car segment))
-	    (loop for predicate in (cdr segment)
-		  do (let* ((pair (signal-handle predicate))
-			    (lhs-signal (car pair))
-			    (rhs-handle (cdr pair))
-			    (curr-rhs (reverse curr-rev-rhs)) ;; forgive the perf here
-			    (new-rule (make-rule `(,lhs-signal <-- ,@curr-rhs))))
-		       (progn
-			 (push new-rule output-rules)
-			 (push rhs-handle curr-rev-rhs))))))
-	(let* ((curr-rhs (reverse curr-rev-rhs))
-	       (new-rule (make-rule `(,end-handle <-- ,@curr-rhs))))
-  	  (progn (push new-rule output-rules)
-		 (reverse output-rules))))))
-
-  (defmacro synthesize-rule (&body body)
-    (let* ((rule (make-rule body))
-           (rules (mapcar #'rule-src (synthesize-explicit-signals rule))))
-      `(progn ,@rules))))
-
 (defprogram syn-map-double ()
   (include ptr-program)
   (include cons-mem)
   (include immediate-num)
 
   (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
-  (relation (map-double-input ptr)) ; TODO: automatically add this during synthesis?
+  (relation (map-double-input ptr))
 
-  #|
-  ;; TODO: Reading this looks a bit funny, since ptr doesn't look like its bound
-  ;; on the RHS, but we will have to improve the syntax at a later time.
-  ;; For now synthesize-rule should produce an acceptably correct result.
-  (synthesize-rule (map-double ptr doubled) <--
+  ;; Generate the necessary signal relations
+  (signal-relation (signal-map-double (input output) (map-double-input input) (map-double input output)))
+  (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
+  (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
+  (signal-relation (input-output (input output) (input-ptr input) (output-ptr output)))
+
+  (synthesize-rule (signal-map-double ptr doubled) <--
     (when (has-tag-p ptr :num))
     (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
-  |#
 
-  ;; TODO: We just use the manual rule.
-  (rule (map-double ptr doubled) <--
-    (map-double-input ptr) (when (has-tag-p ptr :num))
-    (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
-
-  ;; We manually glue up to the input/output.
-  ;; TODO: This actually fits nicely into the synthesis framework, with a rule like this:
-  ;;     (rule (input-output ptr output))
-  ;; where signal = input-ptr and handle = output-ptr.
-  (rule (map-double-input ptr) <-- (input-ptr ptr))
-  (rule (output-ptr output) <-- (input-ptr ptr) (map-double ptr output))
+  (synthesize-rule (input-output input output) <-- (signal-map-double input output))
   
-  (synthesize-rule (map-double ptr double-cons) <--
+  (synthesize-rule (signal-map-double ptr double-cons) <--
     (ingress-cons car cdr ptr)
-    (map-double car double-car)
-    (map-double cdr double-cdr)
+    (signal-map-double car double-car)
+    (signal-map-double cdr double-cdr)
     (signal-cons double-car double-cdr double-cons)))
 
 (test synthesize-explicit-signals
   (defprogram syn-dummy ()
-    (synthesize-rule (map-double ptr double-cons) <--
+    (relation (ingress ptr))
+    (relation (cons ptr ptr))
+    (relation (cons-rel ptr ptr ptr))
+    (relation (map-double ptr ptr))
+    (relation (map-double-input ptr))
+
+    (signal-relation (signal-map-double (input output) (map-double-input input) (map-double input output)))
+    (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
+    (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
+
+    
+    (synthesize-rule (signal-map-double ptr double-cons) <--
       (ingress-cons car cdr ptr)
-      (map-double car double-car)
-      (map-double cdr double-cdr)
+      (signal-map-double car double-car)
+      (signal-map-double cdr double-cdr)
       (signal-cons double-car double-cdr double-cons)))
 
   (defprogram dummy-result ()
-    (rule (ingress ptr) <-- (map-double-input ptr))
+    (rule (ingress ptr) <--
+      (map-double-input ptr))
 
     (rule (map-double-input car) <--
       (map-double-input ptr)
@@ -617,13 +508,10 @@ derive phase 1 by adding implicit signals
          (c2-3 (make-cons :num (widen 2) :num (widen 3))) ; (2 . 3)
          (c2-4 (make-cons :num (widen 2) :num (widen 4))) ; (2 . 4)
          (c4-6 (make-cons :num (widen 4) :num (widen 6))) ; (4 . 6)
-         (c4-8 (make-cons :num (widen 4) :num (widen 8))) ; (4 . 8)
-         ;(c1-2_2-4 (make-cons :cons c1-2 :cons c2-4))
          (c1-2_2-3 (make-cons :cons c1-2 :cons c2-3))
-         ;(c2-4_4-8 (make-cons :cons c2-4 :cons c4-8))
          (c2-4_4-6 (make-cons :cons c2-4 :cons c4-6))
          (expected-output (wide-ptr :cons c2-4_4-6)))
-    (init program `(input-expr ((,(wide-ptr :cons 1-2_2-3)))))
+    (init program `(input-expr ((,(wide-ptr :cons c1-2_2-3)))))
 
     (run program)
 
@@ -640,10 +528,7 @@ derive phase 1 by adding implicit signals
          (c2-3 (make-cons :num (widen 2) :num (widen 3))) ; (2 . 3)
          (c2-4 (make-cons :num (widen 2) :num (widen 4))) ; (2 . 4)
          (c4-6 (make-cons :num (widen 4) :num (widen 6))) ; (4 . 6)
-         (c4-8 (make-cons :num (widen 4) :num (widen 8))) ; (4 . 8)
-         ;(c1-2_2-4 (make-cons :cons c1-2 :cons c2-4))
          (c1-2_2-3 (make-cons :cons c1-2 :cons c2-3))
-         ;(c2-4_4-8 (make-cons :cons c2-4 :cons c4-8))
          (c2-4_4-6 (make-cons :cons c2-4 :cons c4-6))
          (expected-output (wide-ptr :cons c2-4_4-6)))
     (init program `(input-expr ((,(wide-ptr :cons c1-2_2-3)))))
