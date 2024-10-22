@@ -472,7 +472,7 @@
               (mapcar (lambda (x) (slot-value x 'hu.dwim.walker::name))
                       (remove-if-not (lambda (elt)
                                        (typep elt 'hu.dwim.walker:free-variable-reference-form))
-                                     (hu.dwim.walker:collect-variable-references 
+                                     (hu.dwim.walker:collect-variable-references
                                       (hu.dwim.walker:walk-form
                                        form))))))
       free-variables))
@@ -505,7 +505,7 @@ and a list of free variables in FORM."
     ((head :initarg :head :reader predicate-head)
      (args :initarg :args :reader predicate-args)
      (src :initarg :src :reader predicate-src)))
-  
+
   (defmethod make-load-form ((predicate predicate) &optional environment)
     (make-load-form-saving-slots predicate :slot-names '(head args src) :environment environment))
 
