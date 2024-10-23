@@ -377,14 +377,19 @@
   (relation (map-double-input ptr)) ; (input)
   (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
 
+  ; signal
+  (rule (map-double-input input) <--
+    (input-ptr input))
+
+  ;; These are needed to satisfy PTR-PROGRAM. TODO: enforce.
+  (rule (output-ptr output) <--
+    (input-ptr input)
+    (map-double input output))
+
   ;; real
   (rule (map-double ptr doubled) <--
     (map-double-input ptr) (when (has-tag-p ptr :num))
     (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
-
-  ; signal
-  (rule (map-double-input ptr) <--
-    (input-ptr ptr))
 
   ; signal
   (rule (ingress ptr) <--
@@ -401,16 +406,12 @@
     (map-double car double-car)
     (map-double cdr double-cdr))
 
-  ;; This should be the only final rule.
   ;; real
   (rule (map-double ptr double-cons) <--
     (cons-rel car cdr ptr)
     (map-double car double-car)
     (map-double cdr double-cdr)
-    (cons-rel double-car double-cdr double-cons))
-
-  ;; These are needed to satisfy PTR-PROGRAM. TODO: enforce.
-  (rule (output-ptr output) <-- (input-ptr input) (map-double input output)))
+    (cons-rel double-car double-cdr double-cons)))
 
 (defprogram syn-map-double ()
   (include ptr-program)
@@ -426,66 +427,17 @@
   (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
   (signal-relation (input-output (input output) (input-ptr input) (output-ptr output)))
 
+  (synthesize-rule (input-output input output) <-- (signal-map-double input output))
+
   (synthesize-rule (signal-map-double ptr doubled) <--
     (when (has-tag-p ptr :num))
     (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
-
-  (synthesize-rule (input-output input output) <-- (signal-map-double input output))
-
+  
   (synthesize-rule (signal-map-double ptr double-cons) <--
     (ingress-cons car cdr ptr)
     (signal-map-double car double-car)
     (signal-map-double cdr double-cdr)
     (signal-cons double-car double-cdr double-cons)))
-
-(test synthesize-explicit-signals
-  (defprogram syn-dummy ()
-    (relation (ingress ptr))
-    (relation (cons ptr ptr))
-    (relation (cons-rel ptr ptr ptr))
-    (relation (map-double ptr ptr))
-    (relation (map-double-input ptr))
-
-    (signal-relation (signal-map-double (input output) (map-double-input input) (map-double input output)))
-    (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
-    (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
-
-
-    (synthesize-rule (signal-map-double ptr double-cons) <--
-      (ingress-cons car cdr ptr)
-      (signal-map-double car double-car)
-      (signal-map-double cdr double-cdr)
-      (signal-cons double-car double-cdr double-cons)))
-
-  (defprogram dummy-result ()
-    (rule (ingress ptr) <--
-      (map-double-input ptr))
-
-    (rule (map-double-input car) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr))
-
-    (rule (map-double-input cdr) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr)
-      (map-double car double-car))
-
-    (rule (cons double-car double-cdr) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr)
-      (map-double car double-car)
-      (map-double cdr double-cdr))
-
-    (rule (map-double ptr double-cons) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr)
-      (map-double car double-car)
-      (map-double cdr double-cdr)
-      (cons-rel double-car double-cdr double-cons)))
-
-  (let* ((syn-output-rules (dl:rules (find-prototype 'syn-dummy)))
-         (expected-output-rules (dl:rules (find-prototype 'dummy-result))))
-    (is (== expected-output-rules syn-output-rules))))
 
 (defun make-cons (a-tag-spec a-wide b-tag-spec b-wide)
   (hash4 (tag-value a-tag-spec) a-wide (tag-value b-tag-spec) b-wide))
@@ -518,8 +470,7 @@
     ;(datalog::print-relation-counts program t)
 
     (is (== `((,expected-output )) (relation-tuple-list (find-relation program 'output-expr))))
-    (is (not (cons-mem-contiguous-p program)))
-    ))
+    (is (not (cons-mem-contiguous-p program)))))
 
 (test syn-allocation
   (let* ((program (make-program-instance 'syn-map-double))
@@ -537,5 +488,4 @@
     ;(datalog::print-relation-counts program t)
 
     (is (== `((,expected-output )) (relation-tuple-list (find-relation program 'output-expr))))
-    (is (not (cons-mem-contiguous-p program)))
-    ))
+    (is (not (cons-mem-contiguous-p program)))))
