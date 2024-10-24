@@ -57,6 +57,13 @@
 (defmethod relation-types ((r relation))
   (mapcar #'cadr (relation-attribute-types r)))
 
+(defclass signal-relation ()
+  ((name :initarg :name :type symbol :reader signal-relation-name)
+   (dispatcher :initarg :dispatcher :type function :reader signal-relation-dispatcher)))
+
+(defmethod dispatch ((r signal-relation) (predicate-form t))
+  (funcall (signal-relation-dispatcher r) predicate-form))
+
 (defclass rule ()
   ((lhs :initarg :lhs :reader rule-lhs)
    (rhs :initarg :rhs :reader rule-rhs)
@@ -83,6 +90,9 @@
 (defmethod lhs-relations ((rule rule))
   (mapcar #'predicate-head (remove-if-not (lambda (x) (typep x 'predicate)) (rule-lhs rule))))
 
+(defclass signal-relations-mixin ()
+  ((signal-relation :initform () :accessor signal-relations)))
+
 (defclass relations-mixin ()
   ((relations :initform (make-hash-table) :accessor relations)))
 
@@ -103,7 +113,7 @@
    (includes :initarg :includes :initform () :accessor includes)
    (included-programs :initarg :included-programs :initform () :accessor included-programs)))
 
-(defclass program (relations-mixin rules-mixin includes-mixin)
+(defclass program (relations-mixin rules-mixin includes-mixin signal-relations-mixin)
   ((use-naive-evaluation :initarg :use-naive-evaluation :initform nil :accessor program-use-naive-evaluation)
    (all-subprograms)
    (all-rules)))
@@ -200,14 +210,29 @@
           (rule-src-program rule) src-program)
     rule))
 
+(defun make-rule (body)
+  (multiple-value-bind (lhs rhs plans)
+      (parse-rule-body body)
+    (make-instance 'rule :lhs lhs :rhs rhs :plans plans :src `(rule ,@body))))
+
+(defmethod == ((a rule) (b rule))
+  (equalp (rule-src a) (rule-src b)))
+
 (defmethod add-rule ((r rules-mixin) (rule rule))
   (push rule (rules r)))
+
+(defmethod add-synthesize-rule ((r rules-mixin) (input-rule cons))
+    (loop for rule in (parse-synthesize-rule input-rule)
+	do (add-rule r rule)))
 
 (defmethod add-relation ((r relations-mixin) (relation relation))
   (setf (gethash (relation-name relation) (relations r)) relation))
 
 (defmethod add-lattice ((r relations-mixin) (lattice lattice))
   (setf (gethash (relation-name lattice) (relations r)) lattice))
+
+(defmethod add-signal-relation ((h signal-relations-mixin) (signal-relation signal-relation))
+  (setf (getf (signal-relations h) (signal-relation-name signal-relation)) signal-relation))
 
 (defgeneric find-relation (thing name)
   ;; highest precedence: if THING directly contains a relation named NAME, return it (via OR method-combination)
@@ -257,6 +282,10 @@
     (loop for relation being the hash-values of (relations prototype)
           do (when require-unique-relations (assert (not (find-relation *prototype* (relation-name relation)))))
           do (add-relation *prototype* relation))
+
+    (loop for signal-relation in (signal-relations prototype)
+	  do (add-signal-relation *prototype* signal-relation))
+    
     (when require-unique-rules
       (assert (not (intersection (rules prototype) (rules *prototype*)))))
 
@@ -443,7 +472,7 @@
               (mapcar (lambda (x) (slot-value x 'hu.dwim.walker::name))
                       (remove-if-not (lambda (elt)
                                        (typep elt 'hu.dwim.walker:free-variable-reference-form))
-                                     (hu.dwim.walker:collect-variable-references 
+                                     (hu.dwim.walker:collect-variable-references
                                       (hu.dwim.walker:walk-form
                                        form))))))
       free-variables))
@@ -587,6 +616,17 @@ and a list of free variables in FORM."
                             (t item))) (cdr item))))
       (make-instance 'predicate :head (car item) :args args :src item)))
 
+  (defun unparsed-rule-segments (body)
+    (let ((lhs ())
+	  (rhs ())
+	  (post-separator nil))
+      (loop for item in body
+	    if (eq item '<--) do (setq post-separator t)
+	      else do (if post-separator
+			  (push item rhs)
+			  (push item lhs)))
+      (values (nreverse lhs) (nreverse rhs))))
+
   (defun parse-rule-body (body)
     (let ((lhs ())
           (rhs ())
@@ -677,6 +717,81 @@ and a list of free variables in FORM."
            (make-instance 'plan
                           :steps (append predicates restrictions rule-bindings)
                           :segments (nreverse segments)))))))
+
+  (defun handle-signal (prototype predicate)
+    (let* ((signal-relation (getf (signal-relations prototype) (car predicate))))
+      (dispatch signal-relation predicate)))
+
+  (defun segment-kind (item)
+    (case (car item)
+      (let :rule-binding)
+      (when :restriction)
+      (t :predicate)))
+
+  ;; This function takes a unsynthesized rule and synthesizes it.
+  ;;
+  ;; For every signal-relation in the rule, we process it and generate the signal relation and handle relation
+  ;; associated with it. For example, for `ingress-cons` in the allocation program, the signal/handle relations
+  ;; are `ingress` and `cons-rel`.
+  ;;
+  ;; Then, we split the unsynthesized rule into many rules, each one "signaling" the next relation and
+  ;; "handling" the previous. We create a chain of rules that handles all the relations we've signaled,
+  ;; and ends by providing the needed relation given on the LHS.
+  ;; Please see the example tests in `allocation.lisp` for more detail.
+  ;;
+  ;; Note: `parse-synthesize-rule` assumes that the LHS only has one segment.
+  ;; It also assumes that the rule *only* contains signal relations. Normal relations will cause errors.
+
+  #|
+  Example:
+
+  ; Create the necessary signal relations that we're going to need.  
+  (signal-relation (signal-map-double (input output) (map-double-input input) (map-double input output)))
+  (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
+  (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
+
+  ; Starting rule:
+  (synthesize-rule (signal-map-double ptr double-cons) <--
+      (ingress-cons car cdr ptr) ; signal: ingress, handle: cons-rel
+      (signal-map-double car double-car) ; signal: map-double-input, handle: map-double
+      (signal-map-double cdr double-cdr) ; signal: map-double-input, handle: map-double
+      (signal-cons double-car double-cdr double-cons)) ; signal: cons, handle: cons-rel
+
+  ; Resulting rules (each one is "one step" of expansion from processing one signal-relation):
+  ; Note how we first "signal" on the LHS, and then "handle" on the RHS in the next rule.
+  (ingress ptr) <--                   ; example: signal ingress on LHS
+    (map-double-input ptr)
+  (map-double-input car) <-- 
+    (map-double-input) 
+    (cons-rel car cdr ptr)            ; example: handle ingress on RHS
+  (map-double-input cdr) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car doubled-car)
+  (cons doubled-car doubled-cdr) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car doubled-car)
+      (map-double cdr doubled-cdr)
+  |#
+  (defun parse-synthesize-rule (rule)
+    (multiple-value-bind (lhs rhs)
+	(unparsed-rule-segments rule)
+      ;; FIXME: For now, we assume that the LHS only has one segment.
+      (destructuring-bind (first-predicate) lhs
+	(loop with (start-signal . end-handle) = (handle-signal *prototype* first-predicate)
+	      for segment in rhs
+	      for predicate? = (eql (segment-kind segment) :predicate)
+	      ;; FIXME: For now, we assume that all predicates are `signal-relation`s.
+	      ;; If the rule contains a non-signal-relation, then trying to create the program will result in failure.
+	      for (lhs-signal . rhs-handle) = (if predicate? (handle-signal *prototype* segment) '(nil . nil))
+	      when predicate?
+		collect (make-rule `(,lhs-signal <-- ,@(copy-list (cons start-signal curr-rhs-tail))))
+		  into output-rules
+	      collect (if predicate? rhs-handle segment) into curr-rhs-tail
+	      finally (let* ((final-rhs (cons start-signal curr-rhs-tail))
+			     (final-rule (make-rule `(,end-handle <-- ,@final-rhs))))
+			(return `(,@output-rules ,final-rule)))))))
 
   ;; This is defunct and not quite right, but may be useful for reference when returning to multiple pre-optimized plans.
   #+(or)
@@ -836,7 +951,11 @@ and a list of free variables in FORM."
   (:method ((a t) (b t))
     (equalp a b))
   (:method ((a array) (b array))
-    (equalp a b)))
+    (equalp a b))
+  ;; This works, but I have no idea if it is a good idea or not.
+  (:method ((a cons) (b cons))
+    (and (== (car a) (car b))
+	 (== (cdr a) (cdr b)))))
 
 (defun ignored-var-p (var)
   (eql #\_ (char (symbol-name var) 0)))
@@ -887,18 +1006,41 @@ and a list of free variables in FORM."
 (defun find-prototype (name)
   (get name '%prototype))
 
-
 (defmacro relation ((name &body attribute-types))
   `(add-relation *prototype* (make-instance 'relation :name ',name :attribute-types ',attribute-types)))
 
 (defmacro lattice ((name &body attribute-types))
   `(add-lattice *prototype* (make-instance 'lattice :name ',name :attribute-types ',attribute-types)))
 
+;; This macro defines the behavior `synthesize-rule` should take when encountering the signal relation `name`:
+;;
+;; Whenever we are synthesizing a rule and see the symbol `name`, bind the argument to `args`.
+;; Then you should create the signal relation ('signal-name signal-args) and the handle relation ('handle-name handle-args).
+;; 
+;; The implementation expands into a dispatcher that creates the signal/handle forms from the given arguments,
+;; which is called by `handle-signal` to generate the correct signal/handle relations during synthesis.
+(defmacro signal-relation ((name (&body args) (signal-name &body signal-args) (handle-name &body handle-args)))
+  (let* ((return-form `(cons (list ',signal-name ,@signal-args) (list ',handle-name ,@handle-args)))
+	 (lambda-form `(lambda (predicate)
+			(destructuring-bind (,@args)
+			    (cdr predicate)
+			  ,return-form))))
+    `(progn
+       (add-signal-relation *prototype*
+			    (make-instance 'signal-relation
+					   :name ',name
+					   :dispatcher #',lambda-form)))))
 
+;; I'm not exactly sure why, but using the other one causes compile errors on several tests.
 (defmacro rule (&body body)
   (multiple-value-bind (lhs rhs plans)
       (parse-rule-body body)
     `(add-rule *prototype* (make-instance 'rule :lhs ',lhs :rhs ',rhs :plans ',plans :src '(rule ,@body)))))
+#+nil(defmacro rule (&body body)
+  `(add-rule *prototype* (make-rule ',body)))
+
+(defmacro synthesize-rule (&body body)
+  `(add-synthesize-rule *prototype* ',body))
 
 (defmacro include (name &rest options &key require-unique-relations require-unique-rules)
   `(include-prototype ',name ,@options))
@@ -965,8 +1107,19 @@ and a list of free variables in FORM."
     (test-case '(1) '(1 2))
     (test-case '(1 2) '(2))
     (test-case "asdf" "fdsa")
-    (test-case nil 1)
-    ))
+    (test-case nil 1)))
+
+(test rule-equal
+  (defprogram rule1 ()
+    (rule (x a) <-- (y b))
+    (rule (x c) <-- (y d)))
+  (defprogram rule2 ()
+    (rule (x a) <-- (y b))
+    (rule (x c) <-- (y d)))
+
+  (let ((rules1 (dl:rules (find-prototype 'rule1)))
+	(rules2 (dl:rules (find-prototype 'rule2))))
+    (is (== rules1 rules2))))
 
 (test example
   (defprogram example ()
@@ -1147,6 +1300,54 @@ and a list of free variables in FORM."
          (rule (hash4-rel a b c d (hash4 a b c d)) <-- (hash4 ptr a b c d) (when true))
          (rule (ptr-value ptr digest) <-- (hash4 ptr a b c d) (hash4-rel a b c d digest)))
        (spec (find-prototype 'hash4)))))
+
+(test signal-relation-and-synthesize-rule
+  (defprogram syn-dummy ()
+    (relation (ingress ptr))
+    (relation (cons ptr ptr))
+    (relation (cons-rel ptr ptr ptr))
+    (relation (map-double ptr ptr))
+    (relation (map-double-input ptr))
+
+    ; Create the necessary signal-relations.
+    (signal-relation (signal-map-double (input output) (map-double-input input) (map-double input output)))
+    (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
+    (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
+
+    (synthesize-rule (signal-map-double ptr double-cons) <--
+      (ingress-cons car cdr ptr)
+      (signal-map-double car double-car)
+      (signal-map-double cdr double-cdr)
+      (signal-cons double-car double-cdr double-cons)))
+
+  (defprogram dummy-result ()
+    (rule (ingress ptr) <--
+      (map-double-input ptr))
+
+    (rule (map-double-input car) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr))
+
+    (rule (map-double-input cdr) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car double-car))
+
+    (rule (cons double-car double-cdr) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car double-car)
+      (map-double cdr double-cdr))
+
+    (rule (map-double ptr double-cons) <--
+      (map-double-input ptr)
+      (cons-rel car cdr ptr)
+      (map-double car double-car)
+      (map-double cdr double-cdr)
+      (cons-rel double-car double-cdr double-cons)))
+  (let* ((syn-output-rules (dl:rules (find-prototype 'syn-dummy)))
+         (expected-output-rules (dl:rules (find-prototype 'dummy-result))))
+    (is (== expected-output-rules syn-output-rules))))
 
 ;; This demonstrates that we can use DEFPROGRAM at toplevel, which requires ensuring the resulting program is loadable.
 (defprogram let-prog2 ()

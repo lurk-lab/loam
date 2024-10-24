@@ -14,7 +14,7 @@
 (deftype wide-elements () `(vector element ,+wide-size+))
 (deftype wide-bytes () `(vector (unsigned-byte 8) ,(* +wide-size+ +element-bytes+)))
 
-(defstruct wide 
+(defstruct wide
   (elements (make-array '(8) :element-type 'element :initial-element 0) :type wide-elements))
 
 (defun wide-nth (n wide)
@@ -226,10 +226,13 @@
 (defun has-tag-p (ptr tag-spec)
   (eql (ptr-tag ptr) (tag-address tag-spec)))
 
+(defun is-tag-p (tag tag-spec)
+  (eql tag (tag-address tag-spec)))
+
+(defun ptr-wide-tag (ptr) (widen (ptr-tag ptr)))
+
 (defprogram ptr-program (lurk-allocation)
   (relation (tag element wide)) ; (short-tag wide-tag)
-
-  (relation (ptr ptr)) ; (ptr)
 
   ;; It may be confusing that this relation has the same name as the ptr struct's value accessor, since the struct's field is not wide.
   (relation (ptr-value ptr wide)) ; (ptr value)
@@ -244,41 +247,42 @@
   (relation (ingress ptr)) ; (ptr)
   (relation (egress ptr)) ; (ptr)
 
-  ;; signal
-  (rule (ptr ptr) <-- (alloc tag value) (let ((ptr (make-ptr tag (aref (wide-elements value) 0))))))
-
   ;; Ingress path
-  (rule (alloc tag (wide-ptr-value wide-ptr)) <-- (input-expr wide-ptr) (tag tag (wide-ptr-tag wide-ptr)))
+  (rule (alloc tag (wide-ptr-value wide-ptr)) <--
+    (input-expr wide-ptr) (tag tag (wide-ptr-tag wide-ptr)))
 
-  (rule (ingress ptr) (input-ptr ptr) <-- (input-expr wide-ptr) (ptr-value ptr (wide-ptr-value wide-ptr)) (tag (ptr-tag ptr) (wide-ptr-tag wide-ptr)))
+  (rule (ingress ptr) (input-ptr ptr) <--
+    (input-expr wide-ptr)
+    (ptr-value ptr (wide-ptr-value wide-ptr))
+    (tag (ptr-tag ptr) (wide-ptr-tag wide-ptr)))
 
   ;; Egress
   (rule (egress ptr) <-- (output-ptr ptr))
 
   ;; Construct output-expr from output-ptr
-  (rule (output-expr (make-wide-ptr wide-tag value)) <-- (output-ptr ptr) (ptr-value ptr value) (tag (ptr-tag ptr) wide-tag)))
+  (rule (output-expr (make-wide-ptr wide-tag value)) <--
+    (output-ptr ptr)
+    (ptr-value ptr value)
+    (tag (ptr-tag ptr) wide-tag)))
 
 ;; hash-cache takes precedence over program in superclass list
 (defprogram hash4 (hash-cache)
   (include ptr-program)
-  (relation (hash4 ptr wide wide wide wide)) ; (ptr a b c d)
-  (relation (unhash4 element wide)) ; (tag digest)
+  (relation (hash4 wide wide wide wide)) ; (a b c d)
+  (relation (unhash4 wide)) ; (digest)
   (relation (hash4-rel wide wide wide wide wide)) ; (a b c d digest)
 
   ;; signal
-  (rule (hash4-rel a b c d digest) <-- (unhash4 _ digest) (let ((preimage (unhash4 digest))
-                                                                (a (nth 0 preimage))
-                                                                (b (nth 1 preimage))
-                                                                (c (nth 2 preimage))
-                                                                (d (nth 3 preimage)))))
+  (rule (hash4-rel a b c d digest) <--
+    (unhash4 digest)
+    (let ((preimage (unhash4 digest))
+          (a (nth 0 preimage))
+          (b (nth 1 preimage))
+          (c (nth 2 preimage))
+          (d (nth 3 preimage)))))
 
   ;; signal
-  (rule (hash4-rel a b c d (hash a b c d)) <-- (hash4 ptr a b c d))
-
-  ;; This is required to satisfy usage of ptr-program.
-  ;; TODO: Make this enforceable.
-  ;; signal
-  (rule (ptr-value ptr digest) <-- (hash4 ptr a b c d) (hash4-rel a b c d digest)))
+  (rule (hash4-rel a b c d (hash a b c d)) <-- (hash4 a b c d)))
 
 (defprogram cons-mem ()
   (include ptr-program)
@@ -289,8 +293,6 @@
   ;;   (car ptr) (cdr ptr))
   ; signal
   (relation (cons ptr ptr)) ; (car cdr)
-  (relation (car ptr ptr)) ; (cons car)
-  (relation (cdr ptr ptr)) ; (cons cdr)
 
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
   ;;; Memory
@@ -302,73 +304,70 @@
   (lattice (cons-digest-mem wide dual-element)) ; (digest addr)
   (lattice (cons-mem ptr ptr dual-element)) ; (car cdr addr)
 
-  ;; Populating alloc(...) triggers allocation in cons_digest_mem.
-  ;; signal
-  (rule (cons-digest-mem value  (alloc :cons (dual 0))) <-- (alloc (tag-address :cons) value))
+  ;; Populating alloc(...) triggers allocation in cons-digest-mem.
+  (rule (cons-digest-mem value  (alloc :cons (dual 0))) <--
+    (alloc (tag-address :cons) value))
 
-  ;; Convert addr to ptr and register ptr relations.
-  ;; real
-  (rule (ptr ptr) (ptr-value ptr value) <-- (cons-digest-mem value addr) (let ((ptr (ptr :cons (dual-value addr))))))
-
-  ;; signal
+  ;; Populating cons(...) triggers allocation in cons-mem.
   (rule (cons-mem car cdr (alloc :cons (dual 0))) <-- (cons car cdr))
 
-  ;; real
+  ;; Populate cons-digest-mem if a cons in cons-mem has been hashed in hash4-rel.
   (rule (cons-digest-mem digest addr) <--
     (cons-mem car cdr addr)
     (ptr-value car car-value) (ptr-value cdr cdr-value)
     (tag (ptr-tag car) car-tag) (tag (ptr-tag cdr) cdr-tag)
     (hash4-rel car-tag car-value cdr-tag cdr-value digest))
 
-  ;; real
-  (rule (cons-rel car cdr (ptr :cons (dual-value addr))) <-- (cons-mem car cdr addr))
+  ;; Other way around.
+  (rule (cons-mem car cdr addr) <--
+    (cons-digest-mem digest addr)
+    (hash4-rel car-tag car-value cdr-tag cdr-value digest)
+    (ptr-value car car-value) (ptr-value cdr cdr-value)
+    (when (and (== (ptr-wide-tag car) car-tag) (== (ptr-wide-tag cdr) cdr-tag))))
 
-  ;; real
-  (rule (ptr cons) (car cons car) (cdr cons cdr) <-- (cons-rel car cdr cons))
+  ;; Register a cons value.
+  (rule (ptr-value ptr value) <--
+    (cons-digest-mem value addr) (let ((ptr (ptr :cons (dual-value addr))))))
 
-  ;; Note, all of these (when (has-tag-p ...)) could also be expressed by 'inlining' tags and performing a match on constant data, which will perform better
-  ;; with indices and a smart-enough planner.
+  ;; Register a cons relation.
+  (rule (cons-rel car cdr ptr) <--
+    (cons-mem car cdr addr)
+    (let ((ptr (ptr :cons (dual-value addr))))))
+
   ;; signal
-  (rule (unhash4 (tag-address :cons) digest) <-- (ingress ptr) (when (has-tag-p ptr :cons)) (ptr-value ptr digest))
+  (rule (unhash4 digest) <--
+    (ingress ptr) (when (has-tag-p ptr :cons)) (ptr-value ptr digest))
 
   ;; signal
   (rule (alloc car-tag car-value) (alloc cdr-tag cdr-value) <--
-    (unhash4 (tag-address :cons) digest)
+    (unhash4 digest)
     (hash4-rel wide-car-tag car-value wide-cdr-tag cdr-value digest)
     (tag car-tag wide-car-tag)
     (tag cdr-tag wide-cdr-tag))
 
-  ;; real
-  (rule (cons-rel car cdr (ptr :cons addr)) (cons-mem car cdr addr) <--
-    (hash4-rel wide-car-tag car-value wide-cdr-tag cdr-value digest)
-    (cons-digest-mem digest addr)
-    (tag (ptr-tag car) wide-car-tag) (tag (ptr-tag cdr) wide-cdr-tag)
-    (ptr-value car car-value) (ptr-value cdr cdr-value))
-
-  ;; real (but maybe unnecessary)
-  (rule (ptr cons) (car cons car) (cdr cons cdr) <-- (cons-rel car cdr cons))
-
   ;; signal
-  (rule (hash4 cons car-tag car-value cdr-tag cdr-value) <--
+  (rule (hash4 car-tag car-value cdr-tag cdr-value) <--
     (egress cons)
     (cons-rel car cdr cons)
     (tag (ptr-tag car) car-tag) (tag (ptr-tag cdr) cdr-tag)
     (ptr-value car car-value) (ptr-value cdr cdr-value))
 
-  ;; real
-  (rule (ptr car) (ptr cdr) <--
-    (hash4-rel wide-car-tag car-value wide-cdr-tag cdr-value _)
-    (tag (ptr-tag car) wide-car-tag) (tag (ptr-tag cdr) wide-cdr-tag)
-    (ptr-value car car-value) (ptr-value cdr cdr-value))
-
   ;; TODO: Similarly, this should be required somehow.
   ;; signal
-  (rule (egress car) (egress cdr) <-- (egress cons) (cons-rel car cdr cons)))
+  (rule (egress car) (egress cdr) <--
+    (egress cons) (cons-rel car cdr cons)))
 
 (defprogram immediate-num ()
   (include ptr-program)
   ;; real
-  (rule (ptr-value ptr (widen (ptr-value ptr))) <-- (ptr ptr) (when (has-tag-p ptr :num))))
+  (rule (ptr-value ptr value) <--
+    (alloc tag value)
+    (when (is-tag-p tag :num))
+    (let ((ptr (ptr :num (wide-nth 0 value))))))
+
+  (rule (ptr-value ptr value) <--
+    (egress ptr) (when (has-tag-p ptr :num))
+    (let ((value (widen (ptr-value ptr)))))))
 
 (defprogram map-double ()
   (include ptr-program)
@@ -378,33 +377,27 @@
   (relation (map-double-input ptr)) ; (input)
   (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
 
+  ; signal
+  (rule (map-double-input input) <--
+    (input-ptr input))
+
+  ;; These are needed to satisfy PTR-PROGRAM. TODO: enforce.
+  (rule (output-ptr output) <--
+    (input-ptr input)
+    (map-double input output))
+
   ;; real
-  (rule (ptr doubled) (map-double ptr doubled) <-- (map-double-input ptr) (when (has-tag-p ptr :num)) (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
+  (rule (map-double ptr doubled) <--
+    (map-double-input ptr) (when (has-tag-p ptr :num))
+    (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
 
   ; signal
-  (rule (map-double-input ptr) <-- (input-ptr ptr))
+  (rule (ingress ptr) <--
+    (map-double-input ptr))
 
   ; signal
-  (rule (ingress ptr) <-- (map-double-input ptr));
-
-  ; signal
-  (rule (map-double-input car) (map-double-input cdr) <-- (map-double-input cons) (cons-rel car cdr cons))
-
-  (relation (map-double-cont ptr ptr ptr))
-
-  ;; These rules are equivalent to the next two and cheaper for the first program.
-  ;; But the second 
-  ;; (rule (map-double-cont ptr double-car double-cdr) (cons double-car double-cdr) <--
-  ;;   (map-double-input ptr)
-  ;;   (cons-rel car cdr ptr)
-  ;;   (map-double car double-car)
-  ;;   (map-double cdr double-cdr))
-
-  ;; (rule (map-double ptr double-cons) <--
-  ;;   (map-double-cont ptr double-car double-cdr)
-  ;;   (cons-rel double-car double-cdr double-cons))
-
-  ;; The above with MAP-DOUBLE-CONT is equivalent to the following:
+  (rule (map-double-input car) (map-double-input cdr) <--
+    (map-double-input cons) (cons-rel car cdr cons))
 
   ;; signal
   (rule (cons double-car double-cdr) <--
@@ -413,17 +406,38 @@
     (map-double car double-car)
     (map-double cdr double-cdr))
 
-  ;; This should be the only final rule.
   ;; real
   (rule (map-double ptr double-cons) <--
     (cons-rel car cdr ptr)
     (map-double car double-car)
     (map-double cdr double-cdr)
-    (cons-rel double-car double-cdr double-cons))
+    (cons-rel double-car double-cdr double-cons)))
 
-  ;; These are needed to satisfy PTR-PROGRAM. TODO: enforce.
-  ;; real
-  (rule (output-ptr output) <-- (input-ptr input) (map-double input output)))
+(defprogram syn-map-double ()
+  (include ptr-program)
+  (include cons-mem)
+  (include immediate-num)
+
+  (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
+  (relation (map-double-input ptr))
+
+  ;; Generate the necessary signal relations
+  (signal-relation (signal-map-double (input output) (map-double-input input) (map-double input output)))
+  (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
+  (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
+  (signal-relation (input-output (input output) (input-ptr input) (output-ptr output)))
+
+  (synthesize-rule (input-output input output) <-- (signal-map-double input output))
+
+  (synthesize-rule (signal-map-double ptr doubled) <--
+    (when (has-tag-p ptr :num))
+    (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
+  
+  (synthesize-rule (signal-map-double ptr double-cons) <--
+    (ingress-cons car cdr ptr)
+    (signal-map-double car double-car)
+    (signal-map-double cdr double-cdr)
+    (signal-cons double-car double-cdr double-cons)))
 
 (defun make-cons (a-tag-spec a-wide b-tag-spec b-wide)
   (hash4 (tag-value a-tag-spec) a-wide (tag-value b-tag-spec) b-wide))
@@ -446,13 +460,9 @@
          (c2-3 (make-cons :num (widen 2) :num (widen 3))) ; (2 . 3)
          (c2-4 (make-cons :num (widen 2) :num (widen 4))) ; (2 . 4)
          (c4-6 (make-cons :num (widen 4) :num (widen 6))) ; (4 . 6)
-         (c4-8 (make-cons :num (widen 4) :num (widen 8))) ; (4 . 8)
-         ;(c1-2_2-4 (make-cons :cons c1-2 :cons c2-4))
          (c1-2_2-3 (make-cons :cons c1-2 :cons c2-3))
-         ;(c2-4_4-8 (make-cons :cons c2-4 :cons c4-8))
          (c2-4_4-6 (make-cons :cons c2-4 :cons c4-6))
          (expected-output (wide-ptr :cons c2-4_4-6)))
-    (setq asdf program)
     (init program `(input-expr ((,(wide-ptr :cons c1-2_2-3)))))
 
     (run program)
@@ -460,7 +470,22 @@
     ;(datalog::print-relation-counts program t)
 
     (is (== `((,expected-output )) (relation-tuple-list (find-relation program 'output-expr))))
-    (is (not (cons-mem-contiguous-p program)))
-    )
-;  (test-alloc-aux 'alloc nil)
-  )
+    (is (not (cons-mem-contiguous-p program)))))
+
+(test syn-allocation
+  (let* ((program (make-program-instance 'syn-map-double))
+         (*program* program) ;; This is needed for MAKE-CONS.
+         (c1-2 (make-cons :num (widen 1) :num (widen 2))) ; (1 . 2)
+         (c2-3 (make-cons :num (widen 2) :num (widen 3))) ; (2 . 3)
+         (c2-4 (make-cons :num (widen 2) :num (widen 4))) ; (2 . 4)
+         (c4-6 (make-cons :num (widen 4) :num (widen 6))) ; (4 . 6)
+         (c1-2_2-3 (make-cons :cons c1-2 :cons c2-3))
+         (c2-4_4-6 (make-cons :cons c2-4 :cons c4-6))
+         (expected-output (wide-ptr :cons c2-4_4-6)))
+    (init program `(input-expr ((,(wide-ptr :cons c1-2_2-3)))))
+    (run program)
+
+    ;(datalog::print-relation-counts program t)
+
+    (is (== `((,expected-output )) (relation-tuple-list (find-relation program 'output-expr))))
+    (is (not (cons-mem-contiguous-p program)))))
