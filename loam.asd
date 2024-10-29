@@ -18,6 +18,7 @@
                  (:file "lattice")
                  (:file "datalog")
                  (:file "allocation")
+                 (:file "evaluation")
                  (:file "data")
                  )))
 

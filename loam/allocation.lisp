@@ -112,7 +112,7 @@
 
 (defclass lurk-allocation (allocation)
   ()
-  (:default-initargs :tag-names #(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk :builtin :bignum)))
+  (:default-initargs :tag-names #(:u64 :num :bignum :comm :char :str :key :fun :builtin :coroutine :sym :cons :env :thunk :err)))
 
 (defmethod initialize-program :after ((a lurk-allocation) &key &allow-other-keys)
   (setf (allocation-tag-names a) (coerce (allocation-tag-names a) 'vector))
@@ -199,7 +199,7 @@
   (:method ((allocation allocation) ((tag element) t) ((initial-address dual) t))
     (let* ((allocation-map (allocation-allocation-map allocation))
            (last-address (gethash tag allocation-map))
-           (allocated (if last-address (dual (1+ (dual-value last-address))) (dual 0))))
+           (allocated (if last-address (dual (1+ (dual-value last-address))) initial-address)))
       (setf (gethash tag allocation-map) allocated)))
   (:method ((allocation allocation) ((tag-spec keyword) symbol) ((initial-address dual) t))
     (allocate allocation (tag-address tag-spec) initial-address))

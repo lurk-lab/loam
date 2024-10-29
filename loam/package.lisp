@@ -29,28 +29,28 @@
                 #:include #:includes #:included-programs #:<-- #:_ #:== #:run #:init #:program #:defprogram #:initialize-program
                 #:find-relation #:find-prototype #:relation-counts #:print-relation-counts #:relation-tuples
                 #:relation-tuple-list #:less #:spec #:compare-spec)
-  (:export #:*program* #:element #:ptr #:make-ptr #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
-           #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:nth-tag #:lurk-allocation
-           #:allocation-tag-names #:hash-cache #:hash #:unhash #:+element-bits+ ))
+  (:export #:*program* #:element #:dual-element #:ptr #:make-ptr #:ptr-tag #:ptr-value #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
+           #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:tag-address #:nth-tag #:lurk-allocation
+           #:allocation-tag-names #:alloc #:hash-cache #:hash #:unhash #:+element-bits+ #:is-tag-p #:has-tag-p))
 
 (defpackage lurk.builtin
-  (:export #:atom #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
-           #:eq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:nil #:u64 #:open #:quote #:secret #:strcons
-           #:t #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint))
+  (:export #:atom #:apply #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
+           #:eq #:eqq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:u64 #:open #:quote #:secret #:strcons #:list
+           #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail))
 
 (defpackage lurk
-  (:import-from #:lurk.builtin #:atom #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit
-                #:empty-env #:eval #:eq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:nil #:u64 #:open
-                #:quote #:secret #:strcons #:t #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint)
-  (:export #:atom #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit
-           #:empty-env #:eval #:eq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:nil #:u64 #:open
-           #:quote #:secret #:strcons #:t #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint)
+  (:import-from #:lurk.builtin #:atom #:apply #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit
+                #:empty-env #:eval #:eq #:eqq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:u64 #:open
+                #:quote #:secret #:strcons #:list #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail)
+  (:export #:atom #:apply #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
+	   #:eq #:eqq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:u64 #:open #:quote #:secret #:strcons #:list
+	   #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail #:nil #:t)
   )
 
 (defpackage lurk-user
-  (:import-from #:lurk #:atom #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit
-                #:empty-env #:eval #:eq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:nil #:u64 #:open
-                #:quote #:secret #:strcons #:t #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint))
+  (:import-from #:lurk #:atom #:apply #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
+	   #:eq #:eqq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:u64 #:open #:quote #:secret #:strcons #:list
+	   #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail #:nil #:t))
 
 (defpackage data
   (:use #:common-lisp)
@@ -61,7 +61,23 @@
   (:import-from #:allocation #:*program* #:lurk-allocation #:allocation-tag-names #:element #:wide #:wide-elements #:wide-nth
                 #:make-wide #:widen #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:tag-name #:tag-value
                 #:tag #:== #:hash-cache #:hash #:unhash #:+element-bits+ #:nth-tag)
-  (:export #:intern-wide-ptr))
+  (:export #:builtin-idx #:*builtin-list* #:intern-wide-ptr #:num #:env #:thunk #:fu))
+
+(defpackage evaluation
+  (:use #:common-lisp)
+  (:import-from #:base #:todo #:compose)
+  (:import-from #:macros #:display #:awhen #:it)
+  (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
+  (:import-from #:defstar #:defun* #:defmethod* #:defgeneric* #:->)
+  (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals)
+  (:import-from #:datalog #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:signal-relation #:synthesize-rule #:dual #:rule #:rules #:make-program-instance
+                #:include #:includes #:included-programs #:<-- #:_ #:== #:run #:init #:program #:defprogram #:initialize-program
+                #:find-relation #:find-prototype #:relation-counts #:print-relation-counts #:relation-tuples
+                #:relation-tuple-list #:less #:spec #:compare-spec)
+  (:import-from #:allocation #:*program* #:element #:dual-element #:ptr #:make-ptr #:ptr-tag #:ptr-value #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
+           #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:tag-address #:nth-tag #:lurk-allocation
+           #:allocation-tag-names #:alloc #:hash-cache #:hash #:unhash #:+element-bits+ #:is-tag-p #:has-tag-p)
+  (:import-from #:data #:builtin-idx #:*builtin-list* #:intern-wide-ptr #:num #:env #:thunk #:fun))
 
 (defpackage loam
   (:use #:common-lisp)
