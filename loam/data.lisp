@@ -28,7 +28,10 @@
   (next-env nil :type maybe-env))
 
 (defstruct (thunk (:constructor thunk (body closed-env))) body (closed-env maybe-env))
-(defstruct (fun (:constructor fun (args body closed-env))) (args nil :type list) body (closed-env maybe-env))
+(defstruct (fun (:constructor fun (args body closed-env)))
+  (args nil :type list)
+  (body nil :type t)
+  (closed-env maybe-env))
 
 (defun tag (thing)
   (etypecase thing

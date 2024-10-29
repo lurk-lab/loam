@@ -282,15 +282,21 @@
           (d (nth 3 preimage)))))
 
   ;; signal
-  (rule (hash4-rel a b c d (hash a b c d)) <-- (hash4 a b c d)))
+  (rule (hash4-rel a b c d (hash a b c d)) <-- (hash4 a b c d))
+  
+  ;; signal
+  (rule (alloc a-tag a-value) (alloc b-tag b-value) <--
+    (unhash4 digest)
+    (hash4-rel wide-a-tag a-value wide-b-tag b-value digest)
+    (tag a-tag wide-a-tag)
+    (tag b-tag wide-b-tag)))
 
 (defprogram cons-mem ()
   (include ptr-program)
   (include hash4)
 
   ;; The following relations could be determined by something like:
-  ;; (constructor cons ((:tag :cons) (:initial-addr 0) (:hasher hash4))
-  ;;   (car ptr) (cdr ptr))
+  ;; (constructor cons (:cons 0 hash4) (car ptr) (cdr ptr))
   ; signal
   (relation (cons ptr ptr)) ; (car cdr)
 
@@ -323,27 +329,20 @@
     (cons-digest-mem digest addr)
     (hash4-rel car-tag car-value cdr-tag cdr-value digest)
     (ptr-value car car-value) (ptr-value cdr cdr-value)
-    (when (and (== (ptr-wide-tag car) car-tag) (== (ptr-wide-tag cdr) cdr-tag))))
+    (tag (ptr-tag car) car-tag) (tag (ptr-tag cdr) cdr-tag))
 
   ;; Register a cons value.
-  (rule (ptr-value ptr value) <--
-    (cons-digest-mem value addr) (let ((ptr (ptr :cons (dual-value addr))))))
+  (rule (ptr-value cons value) <--
+    (cons-digest-mem value addr) (let ((cons (ptr :cons (dual-value addr))))))
 
   ;; Register a cons relation.
-  (rule (cons-rel car cdr ptr) <--
+  (rule (cons-rel car cdr cons) <--
     (cons-mem car cdr addr)
-    (let ((ptr (ptr :cons (dual-value addr))))))
+    (let ((cons (ptr :cons (dual-value addr))))))
 
   ;; signal
   (rule (unhash4 digest) <--
     (ingress ptr) (when (has-tag-p ptr :cons)) (ptr-value ptr digest))
-
-  ;; signal
-  (rule (alloc car-tag car-value) (alloc cdr-tag cdr-value) <--
-    (unhash4 digest)
-    (hash4-rel wide-car-tag car-value wide-cdr-tag cdr-value digest)
-    (tag car-tag wide-car-tag)
-    (tag cdr-tag wide-cdr-tag))
 
   ;; signal
   (rule (hash4 car-tag car-value cdr-tag cdr-value) <--
@@ -352,7 +351,6 @@
     (tag (ptr-tag car) car-tag) (tag (ptr-tag cdr) cdr-tag)
     (ptr-value car car-value) (ptr-value cdr cdr-value))
 
-  ;; TODO: Similarly, this should be required somehow.
   ;; signal
   (rule (egress car) (egress cdr) <--
     (egress cons) (cons-rel car cdr cons)))
@@ -430,6 +428,15 @@
   (synthesize-rule (input-output input output) <-- (signal-map-double input output))
 
   (synthesize-rule (signal-map-double ptr doubled) <--
+    (if (has-tag-p ptr :num)
+	((let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
+	((ingress-cons car cdr ptr)
+	 (signal-map-double car double-car)
+	 (signal-map-double cdr double-cdr)
+	 (signal-cons double-car double-cdr doubled)))))
+
+  #|
+  (synthesize-rule (signal-map-double ptr doubled) <--
     (when (has-tag-p ptr :num))
     (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
   
@@ -438,6 +445,7 @@
     (signal-map-double car double-car)
     (signal-map-double cdr double-cdr)
     (signal-cons double-car double-cdr double-cons)))
+  |#
 
 (defun make-cons (a-tag-spec a-wide b-tag-spec b-wide)
   (hash4 (tag-value a-tag-spec) a-wide (tag-value b-tag-spec) b-wide))
@@ -489,3 +497,55 @@
 
     (is (== `((,expected-output )) (relation-tuple-list (find-relation program 'output-expr))))
     (is (not (cons-mem-contiguous-p program)))))
+
+(test syn-allocation-spec
+  (defprogram syn-map-double-spec ()
+    (include ptr-program)
+    (include cons-mem)
+    (include immediate-num)
+    
+    (relation (map-double ptr ptr))
+    (relation (map-double-input ptr))
+
+    (rule (map-double-input input) <--
+      (input-ptr input))
+
+    (rule (output-ptr output) <--
+      (input-ptr input)
+      (map-double input output))
+
+    (rule (map-double ptr doubled) <--
+      (map-double-input ptr)
+      (when (has-tag-p ptr :num))
+      (let ((doubled (ptr :num (* 2 (ptr-value ptr)))))))
+    
+    (rule (ingress ptr) <--
+      (map-double-input ptr)
+      (when (not (has-tag-p ptr :num))))
+
+    (rule (map-double-input car) <--
+      (map-double-input ptr)
+      (when (not (has-tag-p ptr :num)))
+      (cons-rel car cdr ptr))
+
+    (rule (map-double-input cdr) <--
+      (map-double-input ptr)
+      (when (not (has-tag-p ptr :num)))
+      (cons-rel car cdr ptr)
+      (map-double car double-car))
+
+    (rule (cons double-car double-cdr) <--
+      (map-double-input ptr)
+      (when (not (has-tag-p ptr :num)))
+      (cons-rel car cdr ptr)
+      (map-double car double-car)
+      (map-double cdr double-cdr))
+
+    (rule (map-double ptr doubled) <--
+      (map-double-input ptr)
+      (when (not (has-tag-p ptr :num)))
+      (cons-rel car cdr ptr)
+      (map-double car double-car)
+      (map-double cdr double-cdr)
+      (cons-rel double-car double-cdr doubled)))
+  (is (compare-spec 'syn-map-double 'syn-map-double-spec)))
