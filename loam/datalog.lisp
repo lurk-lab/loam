@@ -735,18 +735,13 @@ and a list of free variables in FORM."
   ;; Synthesizes a segment that starts with a if statement.
   ;; Errors if the first segment is not a case segment.
   (defun synthesize-if-segment (if-segment curr-rhs end-handle)
-    (destructuring-bind (head if-form &rest branches)
-	if-segment
-      (assert (eql head 'if))
-      (assert (= (length branches) 2)) ; Must only have then and else branches.
-      (loop with first = t
-	    for branch-segments in branches
-	    for test-segment = (if first `(when ,if-form) `(when (not ,if-form)))
-	    for curr-rhs-tail = (append curr-rhs (list test-segment))
-	    when first do (setq first nil)
-	    append (synthesize-segments branch-segments (copy-list curr-rhs-tail) end-handle)
-	      into output-rules
-	    finally (return output-rules))))
+    (assert (eql (car if-segment) 'if))
+    (destructuring-bind (condition if-branch else-branch)
+	(cdr if-segment)
+      (flet ((aux (branch condition-form)
+               (synthesize-segments branch `(,@curr-rhs ,condition-form) end-handle)))
+	(nconc (aux if-branch `(when ,condition))
+               (aux else-branch `(when (not ,condition)))))))
 
   ;; Synthesizes a segment that starts with a case statement.
   ;; Errors if the first segment is not a case segment.
@@ -770,7 +765,7 @@ and a list of free variables in FORM."
 	  when (eql kind :predicate)
 	    collect (make-rule `(,lhs-signal <-- ,@(copy-list curr-rhs-tail))) into output-rules
 	    and collect rhs-handle into curr-rhs-tail
-	  when (or (eql kind :rule-binding) (eql kind :restriction))
+	  when (typep kind '(member :rule-binding :restriction))
 	    collect segment into curr-rhs-tail
 	  when (eql kind :case)
 	    ;; Case statements must be the last segment, because they split the execution into branches.
