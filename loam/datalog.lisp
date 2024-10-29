@@ -616,7 +616,7 @@ and a list of free variables in FORM."
                             (t item))) (cdr item))))
       (make-instance 'predicate :head (car item) :args args :src item)))
 
-  (defun unparsed-rule-segments (body)
+  (defun parse-rule-segments (body)
     (let ((lhs ())
 	  (rhs ())
 	  (post-separator nil))
@@ -625,7 +625,7 @@ and a list of free variables in FORM."
 	      else do (if post-separator
 			  (push item rhs)
 			  (push item lhs)))
-      (values (nreverse lhs) (nreverse rhs))))
+      (cons (nreverse lhs) (nreverse rhs))))
 
   (defun parse-rule-body (body)
     (let ((lhs ())
@@ -718,15 +718,74 @@ and a list of free variables in FORM."
                           :steps (append predicates restrictions rule-bindings)
                           :segments (nreverse segments)))))))
 
-  (defun handle-signal (prototype predicate)
-    (let* ((signal-relation (getf (signal-relations prototype) (car predicate))))
-      (dispatch signal-relation predicate)))
+  (defun handle-signal (prototype segment)
+    (if (eql (segment-kind segment) :predicate)
+	(let* ((signal-relation (getf (signal-relations prototype) (car segment))))
+	  (dispatch signal-relation segment))
+	'(nil . nil)))
 
   (defun segment-kind (item)
     (case (car item)
       (let :rule-binding)
       (when :restriction)
+      (case :case)
+      (if :if)
       (t :predicate)))
+  
+  ;; Synthesizes a segment that starts with a if statement.
+  ;; Errors if the first segment is not a case segment.
+  (defun synthesize-if-segment (if-segment curr-rhs end-handle)
+    (assert (eql (car if-segment) 'if))
+    (destructuring-bind (condition if-branch else-branch)
+	(cdr if-segment)
+      (flet ((aux (branch condition-form)
+               (synthesize-segments branch `(,@curr-rhs ,condition-form) end-handle)))
+	(nconc (aux if-branch `(when ,condition))
+               (aux else-branch `(when (not ,condition)))))))
+
+  ;; Synthesizes a segment that starts with a case statement.
+  ;; Errors if the first segment is not a case segment.
+  (defun synthesize-case-segment (case-segment curr-rhs end-handle)
+    (destructuring-bind (head case-form &rest branches)
+	case-segment
+      (assert (eql head 'case))
+      (loop for (test branch-segments) in branches
+	    for test-segment = `(when (eql ,case-form ,test))
+	    for curr-rhs-tail = (append curr-rhs (list test-segment))
+	    append (synthesize-segments branch-segments (copy-list curr-rhs-tail) end-handle)
+	      into output-rules
+	    finally (return output-rules))))
+
+  (defun synthesize-segments (segments curr-rhs end-handle)
+    (loop with first = t
+	  for (segment . rest) on segments
+	  for kind = (segment-kind segment)
+	  for (lhs-signal . rhs-handle) = (handle-signal *prototype* segment)
+	  when first append curr-rhs into curr-rhs-tail and do (setq first nil)
+	  when (eql kind :predicate)
+	    collect (make-rule `(,lhs-signal <-- ,@(copy-list curr-rhs-tail))) into output-rules
+	    and collect rhs-handle into curr-rhs-tail
+	  when (typep kind '(member :rule-binding :restriction))
+	    collect segment into curr-rhs-tail
+	  when (eql kind :case)
+	    ;; Case statements must be the last segment, because they split the execution into branches.
+	    ;; When synthesizing the case, the final rule must be handled differently for each branch,
+	    ;; so it is the responsibility of each branch (processed in the loop of `synthesize-case-segment`)
+	    ;; to correctly finish each set rules. Thus, after `synthesize-case-segment` returns, we should
+	    ;; immediately return as synthesis should be completed.
+	    do (assert (eql rest nil))
+	    and append (synthesize-case-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
+	    and do (return output-rules)
+	  when (eql kind :if)
+	    ;; Ditto the above for if statements.
+	    do (assert (eql rest nil))
+	    and append (synthesize-if-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
+	    and do (return output-rules)
+	  finally
+	     ;; If we don't hit a case statement, then after we process all segments,
+	     ;; we must finish with an final rule.
+	     (let ((final-rule (make-rule `(,end-handle <-- ,@curr-rhs-tail))))
+	       (return `(,@output-rules ,final-rule)))))
 
   ;; This function takes a unsynthesized rule and synthesizes it.
   ;;
@@ -775,23 +834,11 @@ and a list of free variables in FORM."
       (map-double cdr doubled-cdr)
   |#
   (defun parse-synthesize-rule (rule)
-    (multiple-value-bind (lhs rhs)
-	(unparsed-rule-segments rule)
-      ;; FIXME: For now, we assume that the LHS only has one segment.
-      (destructuring-bind (first-predicate) lhs
-	(loop with (start-signal . end-handle) = (handle-signal *prototype* first-predicate)
-	      for segment in rhs
-	      for predicate? = (eql (segment-kind segment) :predicate)
-	      ;; FIXME: For now, we assume that all predicates are `signal-relation`s.
-	      ;; If the rule contains a non-signal-relation, then trying to create the program will result in failure.
-	      for (lhs-signal . rhs-handle) = (if predicate? (handle-signal *prototype* segment) '(nil . nil))
-	      when predicate?
-		collect (make-rule `(,lhs-signal <-- ,@(copy-list (cons start-signal curr-rhs-tail))))
-		  into output-rules
-	      collect (if predicate? rhs-handle segment) into curr-rhs-tail
-	      finally (let* ((final-rhs (cons start-signal curr-rhs-tail))
-			     (final-rule (make-rule `(,end-handle <-- ,@final-rhs))))
-			(return `(,@output-rules ,final-rule)))))))
+    (destructuring-bind ((lhs) . rhs) ;; This implicitly checks that lhs is a list with one element.
+	(parse-rule-segments rule)
+      (destructuring-bind (start-signal . end-handle)
+	  (handle-signal *prototype* lhs)
+	(synthesize-segments rhs (cons start-signal nil) end-handle))))
 
   ;; This is defunct and not quite right, but may be useful for reference when returning to multiple pre-optimized plans.
   #+(or)
@@ -893,6 +940,11 @@ and a list of free variables in FORM."
     (when current-partition
       (push (nreverse current-partition) partitions))
     (nreverse partitions)))
+
+(defun compare-spec (prototype-1 prototype-2)
+  (equal
+   (cddr (spec (find-prototype prototype-1))) ; cddr because we need to strip `(defprogram <name>)` for a nameless comparison.
+   (cddr (spec (find-prototype prototype-2)))))
 
 (defmethod evaluate ((val-form val-form) (bindings t) (program program))
   (funcall (val-form-compiled val-form) bindings program))
@@ -1300,54 +1352,6 @@ and a list of free variables in FORM."
          (rule (hash4-rel a b c d (hash4 a b c d)) <-- (hash4 ptr a b c d) (when true))
          (rule (ptr-value ptr digest) <-- (hash4 ptr a b c d) (hash4-rel a b c d digest)))
        (spec (find-prototype 'hash4)))))
-
-(test signal-relation-and-synthesize-rule
-  (defprogram syn-dummy ()
-    (relation (ingress ptr))
-    (relation (cons ptr ptr))
-    (relation (cons-rel ptr ptr ptr))
-    (relation (map-double ptr ptr))
-    (relation (map-double-input ptr))
-
-    ; Create the necessary signal-relations.
-    (signal-relation (signal-map-double (input output) (map-double-input input) (map-double input output)))
-    (signal-relation (ingress-cons (car cdr cons) (ingress cons) (cons-rel car cdr cons)))
-    (signal-relation (signal-cons (car cdr cons) (cons car cdr) (cons-rel car cdr cons)))
-
-    (synthesize-rule (signal-map-double ptr double-cons) <--
-      (ingress-cons car cdr ptr)
-      (signal-map-double car double-car)
-      (signal-map-double cdr double-cdr)
-      (signal-cons double-car double-cdr double-cons)))
-
-  (defprogram dummy-result ()
-    (rule (ingress ptr) <--
-      (map-double-input ptr))
-
-    (rule (map-double-input car) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr))
-
-    (rule (map-double-input cdr) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr)
-      (map-double car double-car))
-
-    (rule (cons double-car double-cdr) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr)
-      (map-double car double-car)
-      (map-double cdr double-cdr))
-
-    (rule (map-double ptr double-cons) <--
-      (map-double-input ptr)
-      (cons-rel car cdr ptr)
-      (map-double car double-car)
-      (map-double cdr double-cdr)
-      (cons-rel double-car double-cdr double-cons)))
-  (let* ((syn-output-rules (dl:rules (find-prototype 'syn-dummy)))
-         (expected-output-rules (dl:rules (find-prototype 'dummy-result))))
-    (is (== expected-output-rules syn-output-rules))))
 
 ;; This demonstrates that we can use DEFPROGRAM at toplevel, which requires ensuring the resulting program is loadable.
 (defprogram let-prog2 ()

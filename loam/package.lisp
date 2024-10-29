@@ -16,7 +16,7 @@
   (:export #:*prototype* #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:signal-relation #:synthesize-rule #:dual #:rule #:include #:make-program-instance
            #:includes #:included-programs  #:rules #:<-- #:_ #:== #:run #:init
            #:program #:defprogram #:prototype #:initialize-program #:find-system #:find-relation #:find-prototype
-           #:relation-counts #:print-relation-counts #:relation-tuples #:relation-tuple-list #:less))
+           #:relation-counts #:print-relation-counts #:relation-tuples #:relation-tuple-list #:less #:spec #:compare-spec))
 
 (defpackage allocation
   (:use #:common-lisp)
@@ -28,7 +28,7 @@
   (:import-from #:datalog #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:signal-relation #:synthesize-rule #:dual #:rule #:rules #:make-program-instance
                 #:include #:includes #:included-programs #:<-- #:_ #:== #:run #:init #:program #:defprogram #:initialize-program
                 #:find-relation #:find-prototype #:relation-counts #:print-relation-counts #:relation-tuples
-                #:relation-tuple-list #:less)
+                #:relation-tuple-list #:less #:spec #:compare-spec)
   (:export #:*program* #:element #:ptr #:make-ptr #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
            #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:nth-tag #:lurk-allocation
            #:allocation-tag-names #:hash-cache #:hash #:unhash #:+element-bits+ ))
