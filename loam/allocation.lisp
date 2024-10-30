@@ -231,6 +231,86 @@
 
 (defun ptr-wide-tag (ptr) (widen (ptr-tag ptr)))
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  ;; TODO: Any better way to do this?
+  (defun concat-sym (root suf)
+    (intern (format nil "~A~A" root suf))))
+
+(defmacro mem-constructor (name (tag initial-addr hasher) &body args)
+  (multiple-value-bind
+	(signal-args signal-type-args ptr-value-args tag-args hasher-args)
+      (loop for (arg type) in args
+	    collect arg into signal-args
+	    collect type into signal-type-args
+	    collect `(ptr-value ,arg ,(concat-sym arg '-value)) into ptr-value-args
+	    collect `(tag (ptr-tag ,arg) ,(concat-sym arg '-tag)) into tag-args
+	    append `(,(concat-sym arg '-tag) ,(concat-sym arg '-value)) into hasher-args
+	    finally (return (values signal-args signal-type-args ptr-value-args tag-args hasher-args)))
+    (let* ((name-rel (concat-sym name '-rel))
+	   (name-digest-mem (concat-sym name '-digest-mem))
+	   (name-mem (concat-sym name '-mem))
+	   (hash-rel (concat-sym hasher '-rel))
+	   (unhasher (concat-sym 'un hasher))
+	   (ptr-value-forms ptr-value-args)
+	   (tag-forms tag-args)
+	   (hasher-forms `(,hash-rel ,@hasher-args digest)))
+      `(progn
+	 ;; Signal.
+	 (relation (,name ,@signal-type-args))
+	 ;; The canonical `name` Ptr relation.
+	 (relation (,name-rel ,@signal-type-args ptr))
+
+	 ;; Memory to support data  allocated by digest or contents.
+	 (lattice (,name-digest-mem wide dual-element)) ; (digest addr)
+	 (lattice (,name-mem ,@signal-type-args dual-element)) ; (args addr)
+
+	 ;; Populating alloc(...) triggers allocation in cons-digest-mem.
+	 (rule (,name-digest-mem value  (alloc ,tag (dual ,initial-addr))) <--
+	   (alloc (tag-address ,tag) value))
+
+	 ;; Populating `name`(...) triggers allocation in name-mem.
+	 (rule (,name-mem ,@signal-args (alloc ,tag (dual ,initial-addr))) <-- (,name ,@signal-args))
+	 
+
+	 ;; Populate name-digest-mem if a name in cons-mem has been hashed in hash4-rel.
+	 (rule (,name-digest-mem digest addr) <--
+	   (,name-mem ,@signal-args addr)
+	   ,@ptr-value-forms
+	   ,@tag-forms
+	   ,hasher-forms)
+
+	 ;; Other way around.
+	 (rule (,name-mem ,@signal-args addr) <--
+	   (,name-digest-mem digest addr)
+	   ,hasher-forms
+	   ,@ptr-value-forms
+	   ,@tag-forms)
+
+	 ;; Register a memory value.
+	 (rule (ptr-value ,name value) <--
+	   (,name-digest-mem value addr) (let ((,name (ptr ,tag (dual-value addr))))))
+
+	 ;; Register a memory relation.
+	 (rule (,name-rel ,@signal-args ,name) <--
+	   (,name-mem ,@signal-args addr)
+	   (let ((,name (ptr ,tag (dual-value addr))))))
+
+	 ;; signal
+	 (rule (,unhasher digest) <--
+	   (ingress ptr) (when (has-tag-p ptr ,tag)) (ptr-value ptr digest))
+
+	 ;; signal
+	 (rule (,hasher ,@hasher-args) <--
+	   (egress ,name)
+	   (,name-rel ,@signal-args ,name)
+	   ,@tag-forms
+	   ,@ptr-value-forms)
+
+	 ;; signal
+	 (rule (egress car) (egress cdr) <--
+	   (egress ,name) (,name-rel ,@signal-args ,name))
+	 ))))
+
 (defprogram ptr-program (lurk-allocation)
   (relation (tag element wide)) ; (short-tag wide-tag)
 
@@ -355,6 +435,23 @@
   (rule (egress car) (egress cdr) <--
     (egress cons) (cons-rel car cdr cons)))
 
+#|
+
+(defmem cons (:cons 0 hash4) (car ptr) (cdr ptr))
+(defmem thunk (:thunk 0 hash4) (body ptr) (closed-env ptr))
+(defmem fun (:fun 0 hash5) (args ptr) (body ptr) (closed-env :env wide))
+(defmem sym (:sym 2))
+(defmem builtin (:builtin 41))
+(defimmediate num :num)
+
+|#
+
+(defprogram syn-cons-mem ()
+  (include ptr-program)
+  (include hash4)
+
+  (mem-constructor cons (:cons 0 hash4) (car ptr) (cdr ptr)))
+
 (defprogram immediate-num ()
   (include ptr-program)
   ;; real
@@ -413,7 +510,7 @@
 
 (defprogram syn-map-double ()
   (include ptr-program)
-  (include cons-mem)
+  (include syn-cons-mem)
   (include immediate-num)
 
   (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
@@ -461,6 +558,9 @@
     (loop for (addr next-addr) on addrs
           always (= next-addr (1+ addr)))))
 
+(test mem-constructor-spec
+  (is (compare-spec 'syn-cons-mem 'cons-mem)))
+
 (test allocation
   (let* ((program (make-program-instance 'map-double))
          (*program* program) ;; This is needed for MAKE-CONS.
@@ -501,7 +601,7 @@
 (test syn-allocation-spec
   (defprogram syn-map-double-spec ()
     (include ptr-program)
-    (include cons-mem)
+    (include syn-cons-mem)
     (include immediate-num)
     
     (relation (map-double ptr ptr))
