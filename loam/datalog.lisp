@@ -744,8 +744,8 @@ and a list of free variables in FORM."
 	(nconc (aux if-branch `(when ,condition))
                (aux else-branch `(when (not ,condition)))))))
 
-  ;; Synthesizes a segment that starts with a case statement.
-  ;; Errors if the first segment is not a case segment.
+  ;; Synthesizes a segment that starts with a cond statement.
+  ;; Errors if the first segment is not a cond segment.
   (defun synthesize-cond-segment (case-segment curr-rhs end-handle)
     (destructuring-bind (head &rest branches)
 	case-segment
@@ -773,40 +773,41 @@ and a list of free variables in FORM."
   (defun synthesize-segments (segments curr-rhs end-handle)
     (display 'synthesize-segments segments curr-rhs end-handle)
     (loop with first = t
-	      for (segment . rest) on segments
-	      for kind = (segment-kind segment)
-	      for (lhs-signal . rhs-handle) = (handle-signal *prototype* segment)
-	      when first append curr-rhs into curr-rhs-tail and do (setq first nil)
-		when (eql kind :predicate)
-		  collect (make-rule (display `(,lhs-signal <-- ,@(copy-list curr-rhs-tail)))) into output-rules
-		  and collect rhs-handle into curr-rhs-tail
-	      when (typep kind '(member :rule-binding :restriction))
-		collect segment into curr-rhs-tail
-		and do (display curr-rhs-tail)
-	      when (eql kind :case)
-		;; Case statements must be the last segment, because they split the execution into branches.
-		;; When synthesizing the case, the final rule must be handled differently for each branch,
-		;; so it is the responsibility of each branch (processed in the loop of `synthesize-case-segment`)
-		;; to correctly finish each set rules. Thus, after `synthesize-case-segment` returns, we should
-		;; immediately return as synthesis should be completed.
-		do (assert (eql rest nil))
-		and append (synthesize-case-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
-		and do (return output-rules)
-	      when (eql kind :cond)
-		;; Ditto the above for if statements.
-		do (assert (eql rest nil))
-		and append (synthesize-cond-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
-		and do (return output-rules)
-	      when (eql kind :if)
-		;; Ditto the above for if statements.
-		do (assert (eql rest nil))
-		and append (synthesize-if-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
-		and do (return output-rules)
-	      finally
-		 ;; If we don't hit a case statement, then after we process all segments,
-		 ;; we must finish with an final rule.
-		 (let ((final-rule (make-rule (display `(,end-handle <-- ,@curr-rhs-tail)))))
-		   (return `(,@output-rules ,final-rule)))))
+	  for (segment . rest) on segments
+	  for kind = (segment-kind segment)
+	  for (lhs-signal . rhs-handle) = (handle-signal *prototype* segment)
+	  when first
+	    append curr-rhs into curr-rhs-tail and do (setq first nil)
+	  when (eql kind :predicate)
+	    collect (make-rule (display `(,lhs-signal <-- ,@(copy-list curr-rhs-tail)))) into output-rules
+	    and collect rhs-handle into curr-rhs-tail
+	  when (typep kind '(member :rule-binding :restriction))
+	    collect segment into curr-rhs-tail
+	    and do (display curr-rhs-tail)
+	  when (eql kind :case)
+	    ;; Case statements must be the last segment, because they split the execution into branches.
+	    ;; When synthesizing the case, the final rule must be handled differently for each branch,
+	    ;; so it is the responsibility of each branch (processed in the loop of `synthesize-case-segment`)
+	    ;; to correctly finish each set rules. Thus, after `synthesize-case-segment` returns, we should
+	    ;; immediately return as synthesis should be completed.
+	    do (assert (eql rest nil))
+	    and append (synthesize-case-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
+	    and do (return output-rules)
+	  when (eql kind :cond)
+	    ;; Ditto the above for if statements.
+	    do (assert (eql rest nil))
+	    and append (synthesize-cond-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
+	    and do (return output-rules)
+	  when (eql kind :if)
+	    ;; Ditto the above for if statements.
+	    do (assert (eql rest nil))
+	    and append (synthesize-if-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
+	    and do (return output-rules)
+	  finally
+	     ;; If we don't hit a case statement, then after we process all segments,
+	     ;; we must finish with an final rule.
+	     (let ((final-rule (make-rule (display `(,end-handle <-- ,@curr-rhs-tail)))))
+	       (return `(,@output-rules ,final-rule)))))
 
   ;; This function takes a unsynthesized rule and synthesizes it.
   ;;

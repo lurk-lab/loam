@@ -446,7 +446,6 @@
 					  (signal-eval cdr env evaled-cdr)
 					  (signal-cons car cdr evaled)))
 	  ;; Evaluate if.
-	  #+nil
 	  ((== head (builtin-ptr 'lurk:if)) ((ingress-cons cond branches rest)
 					     (signal-eval cond env evaled-cond)
 					     (ingress-cons a more branches)
@@ -456,7 +455,7 @@
 						  (signal-eval b env evaled))
 						 ((signal-eval a env evaled)))))
 	  ;; Evaluate let/letrec.
-	  
+	  #+nil
 	  ((or (== head (builtin-ptr 'lurk:let)) (== head (builtin-ptr 'lurk:letrec)))
 	       ((ingress-cons bindings tail rest)
 		(ingress-cons body end tail)
@@ -464,6 +463,7 @@
 		(signal-eval-bindings bindings env (== head (builtin-ptr 'lurk:letrec)) extended-env)
 		(signal-eval body extended-env evaled)))
 	  ;; Evaluate lambda.
+	  #+nil
 	  ((== head (builtin-ptr 'lurk:lambda)) ((ingress-cons args tail rest)
 						 (ingress-cons body end tail)
 						 (when (is-nil end))
@@ -472,21 +472,22 @@
 	  ((== head (builtin-ptr 'lurk:+)) ((signal-fold-left head (zero) rest acc)
 					    (let ((evaled (ptr :num acc))))))
 	  ;; Evaluate =. FIXME: Generalize to more ops and bool-fold.
-	  #+nil
 	  ((== head (builtin-ptr 'lurk:=)) ((ingress-cons arg1 tail rest)
 					    (ingress-cons arg2 end tail)
 					    (when (and (is-nil end) (has-tag-p arg1 :num) (has-tag-p arg2 :num)))
 					    (if (== arg1 arg2)
 						((let ((evaled *ptr-t*))))
 						((let ((evaled *ptr-nil*)))))))
-	   ;; Evaluate function.
-	   ((has-tag-p head :fun) ((ingress-fun args body closed-env head)
-				   (signal-funcall args body closed-env rest env evaled)))
-	   ((and (not (has-tag-p head :fun)) (not (has-tag-p head :builtin)))
-	    ((signal-eval head env fun)
-	     (ingress-fun args body closed-env fun)
-	     (signal-funcall args body closed-env rest env evaled)))
-	   
+	  ;; Evaluate function.
+	  #+nil
+	  ((has-tag-p head :fun) ((ingress-fun args body closed-env head)
+				  (signal-funcall args body closed-env rest env evaled)))
+	  #+nil
+	  ((and (not (has-tag-p head :fun)) (not (has-tag-p head :builtin)))
+	   ((signal-eval head env fun)
+	    (ingress-fun args body closed-env fun)
+	    (signal-funcall args body closed-env rest env evaled)))
+	  
 	  )))))
 
   ;; FIXME: Error case when no lookup is found.
@@ -502,6 +503,7 @@
 	     ((let ((value bound-value)))))) ;; Is this efficient? No... but it works.
 	((signal-lookup var more-env value))))
 
+  #+nil
   (synthesize-rule (signal-eval-bindings bindings extended-env is-rec final-env) <--
     (if (is-nil bindings)
 	((let ((final-env extended-env))))
@@ -533,6 +535,7 @@
 	 (let ((result (cond ;; Slightly annoying thing: case doesn't produce == and incorrectly checks ptr equality.
 			 ((== op (builtin-ptr 'lurk:+)) (+ (ptr-value arg) acc)))))))))
 
+  #+nil
   (synthesize-rule (signal-funcall args body closed-env values outer-env result) <--
     (if (and (is-nil args) (is-nil values))
 	((signal-eval body closed-env result))
@@ -1043,7 +1046,7 @@
 	collect (list builtin-value (dual i))))
 
 (defun initial-builtin-digest-mem ()
-  (loop for b in (list 'lurk:lambda 'lurk:+ 'lurk:let)
+  (loop for b in (list 'lurk:if 'lurk:= 'lurk:+)
 	for i = (builtin-idx b)
 	for builtin-value = (wide-ptr-value (intern-wide-ptr b))
 	collect (list builtin-value (dual i))))
@@ -1116,20 +1119,20 @@
 (test deep-var-lookup
   (test-aux 'y `((x . ,(num 9)) (y . ,(num 10))) (num 10)))
 
-(test let-plain
+#+nil(test let-plain
   (test-aux `(lurk:let ((x ,(num 1))) x) nil (num 1)))
 
-(test lambda-plain
+#+nil(test lambda-plain
   (test-aux `(lurk:lambda (x) (lurk:+ x ,(num 1))) nil (fun '(x) `(lurk:+ x ,(num 1)) nil)))
 
-(test funcall
+#+nil(test funcall
   (test-aux `(lurk:let ((f (lurk:lambda (x) (lurk:+ x ,(num 1)))))
 	       (f ,(num 2)))
 	    nil
 	    (num 3)))
 
-(test letrec-plain
+#+nil(test letrec-plain
   (test-aux `(lurk:letrec ((x ,(num 1))) x) nil (num 1)))
 
-(test evaluation-spec
+#+nil(test evaluation-spec
   (is (compare-spec 'evaluation 'syn-evaluation)))

@@ -61,7 +61,7 @@
   (:import-from #:allocation #:*program* #:lurk-allocation #:allocation-tag-names #:element #:wide #:wide-elements #:wide-nth
                 #:make-wide #:widen #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:tag-name #:tag-value
                 #:tag #:== #:hash-cache #:hash #:unhash #:+element-bits+ #:nth-tag)
-  (:export #:builtin-idx #:*builtin-list* #:intern-wide-ptr #:num #:env #:thunk #:fu))
+  (:export #:builtin-idx #:*builtin-list* #:intern-wide-ptr #:num #:env #:thunk #:fun))
 
 (defpackage evaluation
   (:use #:common-lisp)
