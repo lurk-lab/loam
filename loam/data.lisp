@@ -7,7 +7,7 @@
 (def-suite* data-suite :in loam:master-suite)
 
 ;; '(:nil :cons :sym :fun :num :str :char :comm :u64 :key :env :err :thunk :builtin :bignum)
-; (deflexical +tags+ (allocation-tag-names (make-instance 'lurk-allocation)))
+(deflexical +tags+ (allocation-tag-names (make-instance 'lurk-allocation)))
 
 (let ((builtin-package (find-package :lurk.builtin)))
   (defun* lurk-builtin-p ((s symbol))
@@ -138,7 +138,7 @@
     (character :char)
     (comm :comm)
     (thunk :thunk)
-    (env :cons)
+    (env :cons) ; TODO: Revert back to :env
     (fun :fun)))
 
 ;; size is number of elements, bits is bits per 'element'
@@ -190,7 +190,7 @@
     (make-wide :elements (le-elements<- x :size 8)))
   (:method ((tag (eql :bignum)) x)
     (make-wide :elements (le-elements<- x :size 8 :bits +element-bits+)))
-  (:method ((tag (eql :env)) x)
+  (:method ((tag (eql :cons)) (x env))
     (let ((env-key (intern-wide-ptr (env-key x)))
 	  (env-value (intern-wide-ptr (env-value x))))
       (hash (wide-ptr-tag env-key)
@@ -373,8 +373,8 @@
 				   3542027988 2162033960 208146369 2711802215))
               (intern-wide-ptr (thunk '(we want the thunk) env2)))))
     (is (== (make-wide-ptr (tag-value :fun)
-                           (wide 2457271655 1361316774 3992440303 3109589054
-				 3087846088 326130256 771752173 918216196))
+                           (wide 1760390733 1018055170 656655793 351132428
+				 2417246066 1703544600 286035412 916394790))
             (intern-wide-ptr (fun '(a b c) '(+ a (* b c)) nil))))))
 
 (test expr<-wide-ptr
@@ -390,6 +390,7 @@
       (test-roundtrip '(1 2 (3 4)))
       (test-roundtrip 'a)
       (test-roundtrip :mango)
+      ;; TODO: Revert back after restoring :env changes
       #+nil(let* ((env1 (env 'a 123 nil))
              (env2 (env 'b "xxx" env1)))
         (test-roundtrip env1)

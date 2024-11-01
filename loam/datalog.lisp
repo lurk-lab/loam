@@ -11,6 +11,10 @@
   `(when *trace*
      (format *trace* ,@args)))
 
+(defmacro trace-success-log (&rest args)
+  `(when (or *trace* *trace-success-only*)
+     (format (or *trace* *trace-success-only*) ,@args)))
+
 ;; Use explicit vars instead of symbols if symbols are allowable values.
 ;; For now, don't, since it keeps things simpler.
 ;; (defstruct (var (:constructor var (name)) :predicate)
@@ -333,9 +337,10 @@
           (process-with-bindings (plan-segments plan) ()))
 
         (when matching-bindings
-          (trace-log "SUCCESS with ~d new bindings" (length matching-bindings))
-          (trace-log "~%~a~%" matching-bindings)
-          (trace-log ".~%")
+	  (trace-success-log "~a~%" (rule-src rule))
+          (trace-success-log "SUCCESS with ~d new bindings" (length matching-bindings))
+          (trace-success-log "~%~a~%" matching-bindings)
+          (trace-success-log "~%~%~%~%")
           )
 
         matching-bindings))))
@@ -771,7 +776,6 @@ and a list of free variables in FORM."
 	    finally (return output-rules))))
 
   (defun synthesize-segments (segments curr-rhs end-handle)
-    (display 'synthesize-segments segments curr-rhs end-handle)
     (loop with first = t
 	  for (segment . rest) on segments
 	  for kind = (segment-kind segment)
@@ -779,11 +783,10 @@ and a list of free variables in FORM."
 	  when first
 	    append curr-rhs into curr-rhs-tail and do (setq first nil)
 	  when (eql kind :predicate)
-	    collect (make-rule (display `(,lhs-signal <-- ,@(copy-list curr-rhs-tail)))) into output-rules
+	    collect (make-rule `(,lhs-signal <-- ,@(copy-list curr-rhs-tail))) into output-rules
 	    and collect rhs-handle into curr-rhs-tail
 	  when (typep kind '(member :rule-binding :restriction))
 	    collect segment into curr-rhs-tail
-	    and do (display curr-rhs-tail)
 	  when (eql kind :case)
 	    ;; Case statements must be the last segment, because they split the execution into branches.
 	    ;; When synthesizing the case, the final rule must be handled differently for each branch,
@@ -799,14 +802,14 @@ and a list of free variables in FORM."
 	    and append (synthesize-cond-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
 	    and do (return output-rules)
 	  when (eql kind :if)
-	    ;; Ditto the above for if statements.
+	    ;; Ditto the above for cond statements.
 	    do (assert (eql rest nil))
 	    and append (synthesize-if-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
 	    and do (return output-rules)
 	  finally
 	     ;; If we don't hit a case statement, then after we process all segments,
 	     ;; we must finish with an final rule.
-	     (let ((final-rule (make-rule (display `(,end-handle <-- ,@curr-rhs-tail)))))
+	     (let ((final-rule (make-rule `(,end-handle <-- ,@curr-rhs-tail))))
 	       (return `(,@output-rules ,final-rule)))))
 
   ;; This function takes a unsynthesized rule and synthesizes it.
@@ -1072,10 +1075,11 @@ and a list of free variables in FORM."
     (loop for i from 0
           collect (process-rules program)
           do (trace-log "~%------------------------------------------------------------~%")
-          do (trace-log "running iteration: ~a~%" i)
+          do (trace-success-log "running iteration: ~a~%" i)
              ;; prevent runaways
           ;do (when (and (> i 0) (zerop (mod i 100))) (break))
-          while (update program))))
+          while (update program)
+	  )))
 
 (defun find-prototype (name)
   (get name '%prototype))

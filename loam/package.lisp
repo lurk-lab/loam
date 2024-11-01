@@ -13,7 +13,7 @@
   (:import-from #:macros #:display #:symbolconc #:awhen #:it)
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
   (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals #:dual-number)
-  (:export #:*prototype* #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:signal-relation #:synthesize-rule #:dual #:rule #:include #:make-program-instance
+  (:export #:*prototype* #:*program* #:*trace* #:*trace-success-only* #:*step* #:trace-log #:trace-success-log #:relation #:lattice #:signal-relation #:synthesize-rule #:dual #:rule #:include #:make-program-instance
            #:includes #:included-programs  #:rules #:<-- #:_ #:== #:run #:init
            #:program #:defprogram #:prototype #:initialize-program #:find-system #:find-relation #:find-prototype
            #:relation-counts #:print-relation-counts #:relation-tuples #:relation-tuple-list #:less #:spec #:compare-spec))
@@ -70,7 +70,7 @@
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
   (:import-from #:defstar #:defun* #:defmethod* #:defgeneric* #:->)
   (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals)
-  (:import-from #:datalog #:*program* #:*trace* #:*step* #:trace-log #:relation #:lattice #:signal-relation #:synthesize-rule #:dual #:rule #:rules #:make-program-instance
+  (:import-from #:datalog #:*program* #:*trace* #:*trace-success-only* #:*step* #:trace-log #:trace-success-log #:relation #:lattice #:signal-relation #:synthesize-rule #:dual #:rule #:rules #:make-program-instance
                 #:include #:includes #:included-programs #:<-- #:_ #:== #:run #:init #:program #:defprogram #:initialize-program
                 #:find-relation #:find-prototype #:relation-counts #:print-relation-counts #:relation-tuples
                 #:relation-tuple-list #:less #:spec #:compare-spec)
