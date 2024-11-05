@@ -14,7 +14,7 @@
     (eq (symbol-package s) builtin-package)))
 
 ;; Getting them via do-external-symbols doesn't preserve the order, so here we are...
-(defparameter *builtin-list*
+(deflexical +builtins+
   (list 'lurk.builtin:atom
 	'lurk.builtin:apply
 	'lurk.builtin:begin
@@ -57,51 +57,11 @@
 	'lurk.builtin:breakpoint
 	'lurk.builtin:fail))
 
+(loop for sym in +builtins+ for i from 0
+      do (setf (get sym 'idx) i))
+
 ;; Forgive the heresy.
-(defun builtin-idx (b)
-  (case b
-    (lurk.builtin:atom 0)
-    (lurk.builtin:apply 1)
-    (lurk.builtin:begin 2)
-    (lurk.builtin:car 3)
-    (lurk.builtin:cdr 4)
-    (lurk.builtin:char 5)
-    (lurk.builtin:commit 6)
-    (lurk.builtin:comm 7)
-    (lurk.builtin:bignum 8)
-    (lurk.builtin:cons 9)
-    (lurk.builtin:current-env 10)
-    (lurk.builtin:emit 11)
-    (lurk.builtin:empty-env 12)
-    (lurk.builtin:eval 13)
-    (lurk.builtin:eq 14)
-    (lurk.builtin:eqq 15)
-    (lurk.builtin:type-eq 16)
-    (lurk.builtin:type-eqq 17)
-    (lurk.builtin:hide 18)
-    (lurk.builtin:if 19)
-    (lurk.builtin:lambda 20)
-    (lurk.builtin:let 21)
-    (lurk.builtin:letrec 22)
-    (lurk.builtin:u64 23)
-    (lurk.builtin:open 24)
-    (lurk.builtin:quote 25)
-    (lurk.builtin:secret 26)
-    (lurk.builtin:strcons 27)
-    (lurk.builtin:list 28)
-    (lurk.builtin:+ 29)
-    (lurk.builtin:- 30)
-    (lurk.builtin:* 31)
-    (lurk.builtin:/ 32)
-    (lurk.builtin:% 33)
-    (lurk.builtin:= 34)
-    (lurk.builtin:< 35)
-    (lurk.builtin:> 36)
-    (lurk.builtin:<= 37)
-    (lurk.builtin:>= 38)
-    (lurk.builtin:breakpoint 39)
-    (lurk.builtin:fail 40)
-    ))
+(defun builtin-idx (b) (get b 'idx))
 
 ;; bignum is reserved.
 (deftype wide-num () '(unsigned-byte 256))

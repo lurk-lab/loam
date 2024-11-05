@@ -606,7 +606,7 @@
 	  collect (list sym-value (dual i))))
 
 (defun initial-builtin-digest-mem ()
-  (loop for b in *builtin-list*
+  (loop for b in +builtins+
 	for i from 0
 	for builtin-value = (wide-ptr-value (intern-wide-ptr b))
 	collect (list builtin-value (dual i))))
