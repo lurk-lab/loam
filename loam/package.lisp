@@ -61,7 +61,7 @@
   (:import-from #:allocation #:*program* #:lurk-allocation #:allocation-tag-names #:element #:wide #:wide-elements #:wide-nth
                 #:make-wide #:widen #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:tag-name #:tag-value
                 #:tag #:== #:hash-cache #:hash #:unhash #:+element-bits+ #:nth-tag)
-  (:export #:builtin-idx #:*builtin-list* #:intern-wide-ptr #:num #:env #:thunk #:fun))
+  (:export #:builtin-idx #:+builtins+ #:intern-wide-ptr #:num #:env #:thunk #:fun))
 
 (defpackage evaluation
   (:use #:common-lisp)
@@ -77,7 +77,7 @@
   (:import-from #:allocation #:*program* #:element #:dual-element #:ptr #:make-ptr #:ptr-tag #:ptr-value #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
            #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:tag-address #:nth-tag #:lurk-allocation
            #:allocation-tag-names #:alloc #:hash-cache #:hash #:unhash #:+element-bits+ #:is-tag-p #:has-tag-p)
-  (:import-from #:data #:builtin-idx #:*builtin-list* #:intern-wide-ptr #:num #:env #:thunk #:fun))
+  (:import-from #:data #:builtin-idx #:+builtins+ #:intern-wide-ptr #:num #:env #:thunk #:fun))
 
 (defpackage loam
   (:use #:common-lisp)
