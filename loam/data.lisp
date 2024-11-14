@@ -81,7 +81,7 @@
 (defstruct (fun (:constructor fun (args body closed-env)))
   (args nil :type list)
   (body nil :type t)
-  (closed-env cons))
+  (closed-env nil :type list))
 
 (defun tag (thing)
   (etypecase thing
@@ -98,7 +98,7 @@
     (character :char)
     (comm :comm)
     (thunk :thunk)
-    (env :cons) ; TODO: Revert back to :env
+    (env (if env :cons :sym)) ; If env is nil, tag should be sym ; TODO: Revert back to :env
     (fun :fun)))
 
 ;; size is number of elements, bits is bits per 'element'

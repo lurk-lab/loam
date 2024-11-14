@@ -6,6 +6,7 @@
 (defparameter *prototype* nil)
 
 (defparameter *trace* nil)
+(defparameter *trace-success-only* nil)
 
 (defmacro trace-log (&rest args)
   `(when *trace*

@@ -7,9 +7,6 @@
 (defconstant +element-bytes+ 4)
 (defconstant +element-bits+ (* 8 +element-bytes+))
 
-(setq *trace* nil)
-(setq *trace-success-only* nil)
-
 (defun prog-trace (&rest args)
   (display args))
 
@@ -325,7 +322,7 @@
 
 ;; FIXME for PQ: This is a hack for binding a value in a relation.
 ;; When I just write a '0', I get something like: 'etypecase failed, expected one of SYMBOL or DATALOG:VAL-FORM'.
-(defun zero () 0)
+;; (defun zero () 0)
 
 ;; The Lurk evaluation.
 (defprogram evaluation (hash-cache)
@@ -619,8 +616,8 @@
 (test intern-builtin
   (let* ((program (make-program-instance 'builtin-mem))
 	 (*program* program)
-	 (src (spec (find-prototype 'builtin-mem)))
-	 )
+	 ; (src (spec (find-prototype 'builtin-mem)))
+   )
     (init program `(builtin-digest-mem ,(initial-builtin-digest-mem)))
     (run program)
     ))
