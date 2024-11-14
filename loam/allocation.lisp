@@ -236,23 +236,40 @@
   (defun concat-sym (root suf)
     (intern (format nil "~A~A" root suf))))
 
-(defmacro mem-constructor (name (tag initial-addr hasher) &body args)
+(defmacro defmem (name superclasses config &body arg-specs)
   (multiple-value-bind
-	(signal-args signal-type-args ptr-value-args tag-args hasher-args)
-      (loop for (arg type) in args
+	(signal-args signal-type-args ptr-value-args when-tag-args let-tag-args hasher-args)
+      (loop for arg-spec in arg-specs
+	    for arg = (getf arg-spec :arg)
+	    for type = (getf arg-spec :type)
+	    for maybe-explicit-tag = (getf arg-spec :tag)
 	    collect arg into signal-args
 	    collect type into signal-type-args
 	    collect `(ptr-value ,arg ,(concat-sym arg '-value)) into ptr-value-args
-	    collect `(tag (ptr-tag ,arg) ,(concat-sym arg '-tag)) into tag-args
-	    append `(,(concat-sym arg '-tag) ,(concat-sym arg '-value)) into hasher-args
-	    finally (return (values signal-args signal-type-args ptr-value-args tag-args hasher-args)))
-    (let* ((name-rel (concat-sym name '-rel))
+	    ;; Only generate the tag related code when we don't have an explicit tag.
+	    when (not maybe-explicit-tag)
+	      collect `(== (ptr-tag ,arg) (wide-nth 0 ,(concat-sym arg '-tag))) into when-tag-args
+	      and collect `(,(concat-sym arg '-tag) (widen (ptr-tag ,arg))) into let-tag-args
+	      and collect (concat-sym arg '-tag) into hasher-args
+	    collect (concat-sym arg '-value) into hasher-args
+	    finally (return (values
+			     signal-args
+			     signal-type-args
+			     ptr-value-args
+			     when-tag-args
+			     let-tag-args
+			     hasher-args)))
+    (let* ((tag (getf config :tag))
+	   (initial-addr (getf config :initial-addr))
+	   (hasher (getf config :hasher))
+	   (name-rel (concat-sym name '-rel))
 	   (name-digest-mem (concat-sym name '-digest-mem))
 	   (name-mem (concat-sym name '-mem))
 	   (hash-rel (concat-sym hasher '-rel))
 	   (unhasher (concat-sym 'un hasher))
 	   (ptr-value-forms ptr-value-args)
-	   (tag-forms tag-args)
+	   (when-tag-forms `(when (and ,@when-tag-args)))
+	   (let-tag-forms `(let ,let-tag-args))
 	   (hasher-forms `(,hash-rel ,@hasher-args digest)))
       `(progn
 	 ;; Signal.
@@ -303,7 +320,7 @@
 	 (rule (,hasher ,@hasher-args) <--
 	   (egress ,name)
 	   (,name-rel ,@signal-args ,name)
-	   ,@tag-forms
+	   ,@let-tag-forms
 	   ,@ptr-value-forms)
 
 	 ;; signal
@@ -437,7 +454,25 @@
 
 #|
 
-(defmem cons (:cons 0 hash4) (car ptr) (cdr ptr))
+(defmem cons ()
+  (:tag :cons :initial 0 :hasher hash4)
+  (:arg car :type ptr)
+  (:arg cdr :type ptr))
+
+(defmem env ()
+  (:tag :env :initial 0 :hasher hash5)
+  (:arg var :type ptr)
+  (:arg value :type ptr)
+  (:arg env :type wide :tag :env))
+
+(defmem fun ()
+  (:tag :fun :initial 0 :hasher hash5)
+  (:arg args :type ptr)
+  (:arg body :type ptr)
+  (:arg closed-env :type wide :tag :cons)) ;; TODO: 
+
+(defmem cons (:tag :cons :initial 0 :hasher hash4)
+(:arg car :type ptr) (:arg cdr :type ptr))
 (defmem thunk (:thunk 0 hash4) (body ptr) (closed-env ptr))
 (defmem fun (:fun 0 hash5) (args ptr) (body ptr) (closed-env :env wide))
 (defmem sym (:sym 2))
@@ -446,6 +481,7 @@
 
 |#
 
+#+nil
 (defprogram syn-cons-mem ()
   (include ptr-program)
   (include hash4)
@@ -510,7 +546,7 @@
 
 (defprogram syn-map-double ()
   (include ptr-program)
-  (include syn-cons-mem)
+  (include cons-mem)
   (include immediate-num)
 
   (relation (map-double ptr ptr)) ; (input-ptr output-ptr)
