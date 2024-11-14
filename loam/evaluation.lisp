@@ -243,7 +243,8 @@
     (ptr-value closed-env closed-env-value)
     (when (and (== (ptr-tag args) (wide-nth 0 args-tag))
 	       (== (ptr-tag body) (wide-nth 0 body-tag))
-	       ))) ; FIXME: Check env tag.
+	       (== (ptr-tag closed-env) (tag-address :env))
+	       )))
 
   ;; Register a fun value.
   (rule (ptr-value fun value) <--
@@ -258,9 +259,25 @@
   ;; signal
   (rule (unhash5 digest) <--
     (ingress ptr) (when (has-tag-p ptr :fun)) (ptr-value ptr digest))
+  
+  ;; signal
+  (rule
+    (alloc (wide-nth 0 args-tag) args-value)
+    (alloc (wide-nth 0 body-tag) body-value)
+    (alloc (tag-address :env) closed-env-value)
+    <--
+    (unhash5 (tag-address :fun) digest)
+    (hash5-rel args-tag args-value body-tag body-value closed-env-value digest))
 
   ;; signal
-  (rule (hash5 args-tag args-value body-tag body-value closed-env-value) <--
+  (rule
+    (hash5 (tag-address :fun)
+	   (widen (ptr-tag args))
+	   args-value
+	   (widen (ptr-tag body))
+	   body-value
+	   closed-env-value)
+    <--
     (egress fun)
     (fun-rel args body closed-env fun)
     (let ((args-tag (widen (ptr-tag args)))
@@ -272,6 +289,92 @@
   ;; signal
   (rule (egress args) (egress body) (egress closed-env) <--
     (egress fun) (fun-rel args body closed-env fun)))
+
+(defparameter *initial-env-addr* 1)
+
+(defprogram env-mem (hash-cache)
+  (include ptr-program)
+  (include hash5)
+
+  ;; signal
+  (relation (env ptr ptr ptr)) ; (var val inner-env)
+
+  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+  ;;; Memory
+
+  ;; The canonical env Ptr relation.
+  (relation (env-rel ptr ptr ptr ptr)) ; (var val inner-env env)
+
+  ;; Memory to support funs allocated by digest or contents.
+  (lattice (env-digest-mem wide dual-element)) ; (digest addr)
+  (lattice (env-mem ptr ptr ptr dual-element)) ; (var val inner-env addr)
+
+  ;; Populating alloc(...) triggers allocation in env-digest-mem.
+  (rule (env-digest-mem value (alloc :env (dual *initial-env-addr*))) <--
+    (alloc (tag-address :env) value))
+
+  ;; Populating env(...) triggers allocation in env-mem.
+  (rule (env-mem var val inner-env (alloc :env (dual *initial-env-addr*))) <--
+    (env var val inner-env))
+
+  ;; Populate env-digest-mem if a env in env-mem has been hashed in hash5-rel.
+  (rule (env-digest-mem digest addr) <--
+    (env-mem var val inner-env addr)
+    (ptr-value var var-value) (ptr-value val val-value) (ptr-value inner-env inner-env-value)
+    (hash5-rel (widen (ptr-tag var)) var-value (widen (ptr-tag val)) val-value inner-env-value digest))
+
+  ;; Other way around.
+  (rule (env-mem var val inner-env addr) <--
+    (env-digest-mem digest addr)
+    (hash5-rel var-tag var-value val-tag val-value inner-env-value digest)
+    (ptr-value var var-value)
+    (ptr-value val val-value)
+    (ptr-value inner-env inner-env-value)
+    (when (and (== (ptr-tag var) (wide-nth 0 var-tag))
+	       (== (ptr-tag val) (wide-nth 0 val-tag))
+	       (== (ptr-tag inner-env) (tag-address :env))
+	       )))
+
+  ;; Register a env value.
+  (rule (ptr-value env value) <--
+    (env-digest-mem value addr) (let ((env (ptr :env (dual-value addr))))))
+  
+  ;; Register a env relation.
+  (rule (env-rel var val inner-env env) <--
+    (env-mem var val inner-env addr)
+    (let ((env (ptr :env (dual-value addr))))))
+
+  ;; signal
+  (rule (unhash5 (tag-address :env) digest) <--
+    (ingress ptr) (when (has-tag-p ptr :env)) (ptr-value ptr digest))
+  
+  ;; signal
+  (rule
+    (alloc (wide-nth 0 var-tag) var-value)
+    (alloc (wide-nth 0 val-tag) val-value)
+    (alloc (tag-address :env) inner-env-value)
+    <--
+    (unhash5 (tag-address :env) digest)
+    (hash5-rel var-tag var-value val-tag val-value inner-env-value digest))
+
+  ;; signal
+  (rule
+    (hash5 (tag-address :env)
+	   (widen (ptr-tag var))
+	   var-value
+	   (widen (ptr-tag val))
+	   val-value
+	   inner-env-value)
+    <--
+    (egress fun)
+    (env-rel var val inner-env env)
+    (ptr-value var var-value)
+    (ptr-value val val-value)
+    (ptr-value inner-env inner-env-value))
+
+  ;; signal
+  (rule (egress var) (egress val) (egress inner-env) <--
+    (egress env) (env-rel var val inner-env env)))
 
 (defparameter *initial-sym-addr* 2)
 
@@ -330,6 +433,7 @@
   (include cons-mem)
   (include thunk-mem)
   (include fun-mem)
+  (include env-mem)
   (include sym-mem)
   (include builtin-mem)
   (include immediate-num)
@@ -394,6 +498,14 @@
   (signal-relation (signal-fun (args body closed-env fun)
 		    (fun args body closed-env)
                     (fun-rel args body closed-env fun)))
+
+  ;; Env signals.
+  (signal-relation (ingress-env (var val inner-env env)
+		    (ingress env)
+		    (env-rel var val inner-env env)))
+  (signal-relation (signal-env (var val inner-env env)
+		    (env var val inner-env)
+		    (env-rel var val inner-env env)))
 
   ;; The hashing rules below are due to a design restriction of the hash-cache.
   ;; Because the hash-cache is local to the subprogram it is defined from,
@@ -500,13 +612,12 @@
 
   ;; FIXME: Error case when no lookup is found.
   (synthesize-rule (signal-lookup var env value) <--
-    (ingress-cons binding more-env env)
-    (ingress-cons bound-var bound-value binding)
+    (ingress-env bound-var bound-value more-env env)
     (if (== var bound-var)
 	((if (has-tag-p bound-value :thunk)
 	     ;; If the looked-up value is a thunk.
 	     ((ingress-thunk body closed-env bound-value)
-	      (signal-cons binding closed-env extended-env)
+	      (signal-env bound-var bound-value closed-env extended-env)
 	      (signal-eval body extended-env value))
 	     ((let ((value bound-value)))))) ;; Is this efficient? No... but it works.
 	((signal-lookup var more-env value))))
@@ -521,15 +632,13 @@
 	 (if is-rec
 	     ;; Recursive case: make a thunk.
 	     ((signal-thunk unevaled extended-env thunk)
-	      (signal-cons var thunk env-binding)
-	      (signal-cons env-binding extended-env new-env)
+	      (signal-env var thunk extended-env new-env)
 	      (signal-eval-bindings more-bindings new-env is-rec final-env))
 	     ;; Non-recursive case: just evaluate.
 	     ;; FIXME: There's unfortunate duplication here, change synthesis so that `if/case/cond`
 	     ;; don't have to be the final segment. Kind of a headache.
 	     ((signal-eval unevaled extended-env evaled)
-	      (signal-cons var evaled env-binding)
-	      (signal-cons env-binding extended-env new-env)
+	      (signal-env var evaled extended-env new-env)
 	      (signal-eval-bindings more-bindings new-env is-rec final-env)))
 	 )))
 
@@ -561,16 +670,17 @@
 	((ingress-cons arg more-args args)
 	 (ingress-cons unevaled more-values values)
 	 (signal-eval unevaled outer-env evaled)
-	 (signal-cons arg evaled binding)
-	 (signal-cons binding closed-env new-closed-env)
+	 (signal-env arg evaled closed-env new-closed-env)
 	 (signal-funcall more-args body new-closed-env more-values outer-env result))))
   )
 
 (defparameter *ptr-nil* (make-ptr 10 0))
 (defparameter *ptr-t* (make-ptr 10 1))
+(defparameter *ptr-nil-env* (make-ptr 12 0))
 
 (defun is-nil (ptr) (== ptr *ptr-nil*))
 (defun is-t (ptr) (== ptr *ptr-t*))
+(defun is-nil-env (ptr) (== ptr *ptr-nil-env*))
 
 (defun lurk-bool (bool)
   (if bool *ptr-t* *ptr-nil*))
@@ -596,11 +706,14 @@
     ((== op (builtin-ptr 'lurk:>)) (lurk-bool (> (ptr-value arg1) (ptr-value arg2))))
     ))
 
+(defun initial-env-digest-mem ()
+  (list (list (widen 0) (dual 0)))) ;; Null env pointer.
+
 (defun initial-sym-digest-mem ()
-    (loop for sym in (list nil t)
-	  for i from 0
-	  for sym-value = (wide-ptr-value (intern-wide-ptr sym))
-	  collect (list sym-value (dual i))))
+  (loop for sym in (list nil t)
+	for i from 0
+	for sym-value = (wide-ptr-value (intern-wide-ptr sym))
+	collect (list sym-value (dual i))))
 
 (defun initial-builtin-digest-mem ()
   (loop for b in +builtins+
@@ -629,6 +742,7 @@
 	 )
     ; (display 'src src)
     (init program `(toplevel-input ((,(intern-wide-ptr input) ,(intern-wide-ptr env)))
+				   env-digest-mem ,(initial-env-digest-mem)
 				   sym-digest-mem ,(initial-sym-digest-mem)
 				   builtin-digest-mem ,(initial-builtin-digest-mem)))
     (run program)
@@ -642,6 +756,8 @@
     (display-relation program 'thunk-digest-mem)
     (display-relation program 'fun-mem)
     (display-relation program 'fun-digest-mem)
+    (display-relation program 'env-mem)
+    (display-relation program 'env-digest-mem)
     
     (display-relation program 'ptr-value)
     (display-relation program 'hash4)
@@ -658,93 +774,93 @@
     (is (== `((,(intern-wide-ptr expected-output))) (relation-tuple-list (find-relation program 'output-expr))))))
 
 (test self-evaluating-num
-  (test-aux (num 123) nil (num 123)))
+  (test-aux (num 123) 'nil-env (num 123)))
 
 (test self-evaluating-nil
-  (test-aux nil nil nil))
+  (test-aux nil 'nil-env nil))
 
 (test self-evaluating-t
-  (test-aux t nil t))
+  (test-aux t 'nil-env t))
 
 ;; TODO: Restore with variadic ops
 #+nil
 (test zero-arg-addition
-  (test-aux '(lurk:+) nil (num 0)))
+  (test-aux '(lurk:+) 'nil-env (num 0)))
 
 ;; TODO: Restore with variadic ops
 #+nil
 (test one-arg-addition
-  (test-aux `(lurk:+ ,(num 1)) nil (num 1)))
+  (test-aux `(lurk:+ ,(num 1)) 'nil-env (num 1)))
 
 (test two-arg-addition
-  (test-aux `(lurk:+ ,(num 1) ,(num 2)) nil (num 3)))
+  (test-aux `(lurk:+ ,(num 1) ,(num 2)) 'nil-env (num 3)))
 
 (test two-arg-subtraction
-  (test-aux `(lurk:- ,(num 3) ,(num 1)) nil (num 2)))
+  (test-aux `(lurk:- ,(num 3) ,(num 1)) 'nil-env (num 2)))
 
 (test two-arg-multiplication
-  (test-aux `(lurk:* ,(num 3) ,(num 4)) nil (num 12)))
+  (test-aux `(lurk:* ,(num 3) ,(num 4)) 'nil-env (num 12)))
 
 ;; TODO: Restore with variadic ops
 #+nil
 (test three-arg-addition
-  (test-aux `(lurk:+ ,(num 1) ,(num 2) ,(num 3)) nil (num 6)))
+  (test-aux `(lurk:+ ,(num 1) ,(num 2) ,(num 3)) 'nil-env (num 6)))
 
 (test eq-t
-  (test-aux `(lurk:= ,(num 1) ,(num 1)) nil t))
+  (test-aux `(lurk:= ,(num 1) ,(num 1)) 'nil-env t))
 
 (test eq-nil
-  (test-aux `(lurk:= ,(num 1) ,(num 2)) nil nil))
+  (test-aux `(lurk:= ,(num 1) ,(num 2)) 'nil-env nil))
 
 (test leq-t
-  (test-aux `(lurk:< ,(num 1) ,(num 2)) nil t))
+  (test-aux `(lurk:< ,(num 1) ,(num 2)) 'nil-env t))
 
 (test leq-nil
-  (test-aux `(lurk:< ,(num 1) ,(num 1)) nil nil))
+  (test-aux `(lurk:< ,(num 1) ,(num 1)) 'nil-env nil))
 
 (test geq-t
-  (test-aux `(lurk:> ,(num 2) ,(num 1)) nil t))
+  (test-aux `(lurk:> ,(num 2) ,(num 1)) 'nil-env t))
 
 (test geq-nil
-  (test-aux `(lurk:> ,(num 1) ,(num 1)) nil nil))
+  (test-aux `(lurk:> ,(num 1) ,(num 1)) 'nil-env nil))
 
 (test if-t
-  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 1)) ,(num 123) ,(num 456)) nil (num 123)))
+  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 1)) ,(num 123) ,(num 456)) 'nil-env (num 123)))
 
 (test if-nil
-  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 2)) ,(num 123) ,(num 456)) nil (num 456)))
+  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 2)) ,(num 123) ,(num 456)) 'nil-env (num 456)))
 
 (test var-lookup
-  (test-aux 'x `((x . ,(num 9))) (num 9)))
+  (test-aux 'x (env 'x (num 9) 'nil-env) (num 9)))
 
 (test deep-var-lookup
-  (test-aux 'y `((x . ,(num 9)) (y . ,(num 10))) (num 10)))
+  (test-aux 'y (env 'x (num 9) (env 'y (num 10) 'nil-env)) (num 10)))
 
 (test let-plain
-  (test-aux `(lurk:let ((x ,(num 1))) x) nil (num 1)))
+  (test-aux `(lurk:let ((x ,(num 1))) x) 'nil-env (num 1)))
 
 (test lambda-plain
-  (test-aux `(lurk:lambda (x) (lurk:+ x ,(num 1))) nil (fun '(x) `(lurk:+ x ,(num 1)) nil)))
+  (test-aux `(lurk:lambda (x) (lurk:+ x ,(num 1))) 'nil-env (fun '(x) `(lurk:+ x ,(num 1)) 'nil-env)))
 
 (test funcall-zero-args
-  (test-aux `((lurk:lambda () ,(num 1))) nil (num 1)))
+  (test-aux `((lurk:lambda () ,(num 1))) 'nil-env (num 1)))
 
 (test funcall-one-args
-  (test-aux `((lurk:lambda (x) (lurk:+ x ,(num 1))) ,(num 1)) nil (num 2)))
+  (test-aux `((lurk:lambda (x) (lurk:+ x ,(num 1))) ,(num 1)) 'nil-env (num 2)))
 
 (test funcall
   (test-aux `(lurk:let ((f (lurk:lambda (x) (lurk:+ x ,(num 1)))))
 	       (f ,(num 2)))
-	    nil
+	    'nil-env
 	    (num 3)))
 
 (test letrec-plain
-  (test-aux `(lurk:letrec ((x ,(num 1))) x) nil (num 1)))
+  (test-aux `(lurk:letrec ((x ,(num 1))) x) 'nil-env (num 1)))
 
 (test letrec-funcall
   (test-aux `(lurk:letrec ((f (lurk:lambda (x) (lurk:+ x ,(num 1)))))
 			  (f ,(num 2)))
-	    nil
+	    'nil-env
 	    (num 3)))
 
 (test letrec-fact
@@ -753,7 +869,7 @@
 							   (lurk:* (fact (lurk:- n ,(num 1)))
 								   n)))))
 			  (fact ,(num 4)))
-	    nil
+	    'nil-env
 	    (num 24)
 	    ))
 
@@ -763,7 +879,7 @@
 								(lurk:+ (fibonacci (lurk:- n ,(num 1)))
 									(fibonacci (lurk:- n ,(num 2))))))))
 			  (fibonacci ,(num 7)))
-	    nil
+	    'nil-env
 	    (num 21)
 	    ))
 
