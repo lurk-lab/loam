@@ -6,10 +6,15 @@
 (defparameter *prototype* nil)
 
 (defparameter *trace* nil)
+(defparameter *trace-success-only* nil)
 
 (defmacro trace-log (&rest args)
   `(when *trace*
      (format *trace* ,@args)))
+
+(defmacro trace-success-log (&rest args)
+  `(when (or *trace* *trace-success-only*)
+     (format (or *trace* *trace-success-only*) ,@args)))
 
 ;; Use explicit vars instead of symbols if symbols are allowable values.
 ;; For now, don't, since it keeps things simpler.
@@ -333,9 +338,10 @@
           (process-with-bindings (plan-segments plan) ()))
 
         (when matching-bindings
-          (trace-log "SUCCESS with ~d new bindings" (length matching-bindings))
-          (trace-log "~%~a~%" matching-bindings)
-          (trace-log ".~%")
+	  (trace-success-log "~a~%" (rule-src rule))
+          (trace-success-log "SUCCESS with ~d new bindings" (length matching-bindings))
+          (trace-success-log "~%~a~%" matching-bindings)
+          (trace-success-log "~%~%~%~%")
           )
 
         matching-bindings))))
@@ -729,6 +735,7 @@ and a list of free variables in FORM."
       (let :rule-binding)
       (when :restriction)
       (case :case)
+      (cond :cond)
       (if :if)
       (t :predicate)))
   
@@ -742,6 +749,19 @@ and a list of free variables in FORM."
                (synthesize-segments branch `(,@curr-rhs ,condition-form) end-handle)))
 	(nconc (aux if-branch `(when ,condition))
                (aux else-branch `(when (not ,condition)))))))
+
+  ;; Synthesizes a segment that starts with a cond statement.
+  ;; Errors if the first segment is not a cond segment.
+  (defun synthesize-cond-segment (case-segment curr-rhs end-handle)
+    (destructuring-bind (head &rest branches)
+	case-segment
+      (assert (eql head 'cond))
+      (loop for (test branch-segments) in branches
+	    for test-segment = `(when ,test)
+	    for curr-rhs-tail = (append curr-rhs (list test-segment))
+	    append (synthesize-segments branch-segments (copy-list curr-rhs-tail) end-handle)
+	      into output-rules
+	    finally (return output-rules))))
 
   ;; Synthesizes a segment that starts with a case statement.
   ;; Errors if the first segment is not a case segment.
@@ -761,7 +781,8 @@ and a list of free variables in FORM."
 	  for (segment . rest) on segments
 	  for kind = (segment-kind segment)
 	  for (lhs-signal . rhs-handle) = (handle-signal *prototype* segment)
-	  when first append curr-rhs into curr-rhs-tail and do (setq first nil)
+	  when first
+	    append curr-rhs into curr-rhs-tail and do (setq first nil)
 	  when (eql kind :predicate)
 	    collect (make-rule `(,lhs-signal <-- ,@(copy-list curr-rhs-tail))) into output-rules
 	    and collect rhs-handle into curr-rhs-tail
@@ -776,8 +797,13 @@ and a list of free variables in FORM."
 	    do (assert (eql rest nil))
 	    and append (synthesize-case-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
 	    and do (return output-rules)
-	  when (eql kind :if)
+	  when (eql kind :cond)
 	    ;; Ditto the above for if statements.
+	    do (assert (eql rest nil))
+	    and append (synthesize-cond-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
+	    and do (return output-rules)
+	  when (eql kind :if)
+	    ;; Ditto the above for cond statements.
 	    do (assert (eql rest nil))
 	    and append (synthesize-if-segment segment (copy-list curr-rhs-tail) end-handle) into output-rules
 	    and do (return output-rules)
@@ -1050,10 +1076,11 @@ and a list of free variables in FORM."
     (loop for i from 0
           collect (process-rules program)
           do (trace-log "~%------------------------------------------------------------~%")
-          do (trace-log "running iteration: ~a~%" i)
+          do (trace-success-log "running iteration: ~a~%" i)
              ;; prevent runaways
           ;do (when (and (> i 0) (zerop (mod i 100))) (break))
-          while (update program))))
+          while (update program)
+	  )))
 
 (defun find-prototype (name)
   (get name '%prototype))
