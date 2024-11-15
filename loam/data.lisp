@@ -93,7 +93,7 @@
     (boolean :sym) ; nil and t are both sym.
     (cons :cons)
     (keyword :key)
-    (symbol (if (eql 'nil-env thing)
+    (symbol (if (eql 'lurk:nil-env thing)
 		:env
 		(if (lurk-builtin-p thing) :builtin :sym)))
     (num :num)
@@ -156,7 +156,7 @@
     (make-wide :elements (le-elements<- x :size 8)))
   (:method ((tag (eql :bignum)) x)
     (make-wide :elements (le-elements<- x :size 8 :bits +element-bits+)))
-  (:method ((tag (eql :env)) (x (eql 'nil-env)))
+  (:method ((tag (eql :env)) (x (eql 'lurk:nil-env)))
     (widen 0))
   (:method ((tag (eql :env)) (x env))
     (let ((env-key (intern-wide-ptr (env-key x)))
@@ -218,7 +218,7 @@
              (expr<-wide-ptr-parts (tag-value :env) env-value))))
   (:method ((tag (eql :env)) (w wide))
     (if (wide-zero-p w)
-	'nil-env
+	'lurk:nil-env
 	(destructuring-bind (key-tag key-value val-tag val-value next-env)
             (unhash w 5)
 	  (env (expr<-wide-ptr-parts key-tag key-value)
@@ -278,7 +278,7 @@
                            (wide 281884145 1129688213 4120351968 327773871
 				 384021070 117463301 2561106250 2236819005))
             (intern-wide-ptr nil)))
-    #+nil(is (== (make-wide-ptr (tag-value :sym)
+    (is (== (make-wide-ptr (tag-value :sym)
                            (wide 3513864683 4092952692 2311625634 434126079
 				 1771964958 3138455192 216228261 3651295992))
             (intern-wide-ptr t)))
@@ -327,8 +327,12 @@
                            (wide 3232492942 3172902725 3905286198 3869388357
 				 3770444062 3474609343 2951998298 4004311820))
             (intern-wide-ptr `(foo (bar 1) (:baz #\x "monkey") ,(num 123) ,(1- (expt 2 256))))))
-    (let* ((env1 (env 'a 123 'nil-env))
+    (let* ((env0 'lurk:nil-env)
+	   (env1 (env 'a 123 env0))
            (env2 (env 'b :xxx env1)))
+      (is (== (make-wide-ptr (tag-value :env)
+                             (wide 0 0 0 0 0 0 0 0))
+              (intern-wide-ptr env0)))
       (is (== (make-wide-ptr (tag-value :env)
                              (wide 2064456524 2837991327 1206943432 1993810858
 				   165399524 1338455424 3431677448 3424566788))
@@ -360,7 +364,7 @@
       (test-roundtrip 'a)
       (test-roundtrip :mango)
       ;; TODO: Revert back after restoring :env changes
-      (let* ((env0 'nil-env)
+      (let* ((env0 'lurk:nil-env)
 	     (env1 (env 'a 123 env0))
              (env2 (env 'b "xxx" env1)))
         (test-roundtrip env0)
@@ -370,6 +374,6 @@
         )
       (test-roundtrip "roundtrip")
       (test-roundtrip (comm 0 123))
-      (test-roundtrip (fun '(a b c) '(+ a (* b c)) (env 'x 1 'nil-env)))
+      (test-roundtrip (fun '(a b c) '(+ a (* b c)) (env 'x 1 'lurk:nil-env)))
       (test-roundtrip 'lurk:lambda)
-      (test-roundtrip '('lurk:cons 1 2)))))
+      (test-roundtrip '(lurk:cons 1 2)))))

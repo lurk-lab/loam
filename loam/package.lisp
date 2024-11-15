@@ -31,7 +31,7 @@
                 #:relation-tuple-list #:less #:spec #:compare-spec)
   (:export #:*program* #:element #:dual-element #:ptr #:make-ptr #:ptr-tag #:ptr-value #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
            #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:tag-address #:nth-tag #:lurk-allocation
-           #:allocation-tag-names #:alloc #:hash-cache #:hash #:unhash #:+element-bits+ #:is-tag-p #:has-tag-p))
+           #:allocation-tag-names #:alloc #:hash-cache #:hash #:unhash #:+element-bits+ #:is-tag-p #:has-tag-p #:defmem))
 
 (defpackage lurk.builtin
   (:export #:atom #:apply #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
@@ -44,13 +44,13 @@
                 #:quote #:secret #:strcons #:list #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail)
   (:export #:atom #:apply #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
 	   #:eq #:eqq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:u64 #:open #:quote #:secret #:strcons #:list
-	   #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail #:nil #:t)
+	   #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail #:nil #:t #:nil-env)
   )
 
 (defpackage lurk-user
   (:import-from #:lurk #:atom #:apply #:begin #:car #:cdr #:char #:commit #:comm #:bignum #:cons #:current-env #:emit #:empty-env #:eval
 	   #:eq #:eqq #:type-eq #:type-eqq #:hide #:if #:lambda #:let #:letrec #:u64 #:open #:quote #:secret #:strcons #:list
-	   #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail #:nil #:t))
+	   #:+ #:- #:* #:/ #:% #:= #:< #:> #:<= #:>= #:breakpoint #:fail #:nil #:t #:nil-env))
 
 (defpackage data
   (:use #:common-lisp)
@@ -76,7 +76,7 @@
                 #:relation-tuple-list #:less #:spec #:compare-spec)
   (:import-from #:allocation #:*program* #:element #:dual-element #:ptr #:make-ptr #:ptr-tag #:ptr-value #:wide-ptr #:make-wide-ptr #:wide-ptr-tag #:wide-ptr-value #:make-wide
            #:widen #:wide #:wide-elements #:wide-nth #:element #:tag #:tag-name #:tag-value #:tag-address #:nth-tag #:lurk-allocation
-           #:allocation-tag-names #:alloc #:hash-cache #:hash #:unhash #:+element-bits+ #:is-tag-p #:has-tag-p)
+           #:allocation-tag-names #:alloc #:hash-cache #:hash #:unhash #:+element-bits+ #:is-tag-p #:has-tag-p #:defmem)
   (:import-from #:data #:builtin-idx #:+builtins+ #:intern-wide-ptr #:num #:env #:thunk #:fun))
 
 (defpackage loam
