@@ -71,7 +71,11 @@
 
 (defstruct (comm (:constructor comm (secret value))) secret value)
 
-(deftype maybe-env () '(or null env))
+;; TODO(winston): we use the 'nil-env symbol to represent the empty env and
+;; hardcode a check for this when constructing envs.
+;; This should be refactored to use an empty env struct, or a flag in the env struct,
+;; since that removes potential symbol conflicts.
+(deftype maybe-env () '(or symbol env))
 (defstruct (env (:constructor env (key value next-env)))
   (key nil :type t) ; Key can be of type :sym, :builtin, or :coroutine.
   (value nil :type t)
@@ -81,7 +85,7 @@
 (defstruct (fun (:constructor fun (args body closed-env)))
   (args nil :type list)
   (body nil :type t)
-  (closed-env nil :type list))
+  (closed-env nil :type maybe-env))
 
 (defun tag (thing)
   (etypecase thing
@@ -89,7 +93,9 @@
     (boolean :sym) ; nil and t are both sym.
     (cons :cons)
     (keyword :key)
-    (symbol (if (lurk-builtin-p thing) :builtin :sym))
+    (symbol (if (eql 'nil-env thing)
+		:env
+		(if (lurk-builtin-p thing) :builtin :sym)))
     (num :num)
     ((unsigned-byte 64) :u64)
     (wide-num :bignum)
@@ -98,7 +104,7 @@
     (character :char)
     (comm :comm)
     (thunk :thunk)
-    (env (if env :cons :sym)) ; If env is nil, tag should be sym ; TODO: Revert back to :env
+    (maybe-env :env)
     (fun :fun)))
 
 ;; size is number of elements, bits is bits per 'element'
@@ -150,7 +156,9 @@
     (make-wide :elements (le-elements<- x :size 8)))
   (:method ((tag (eql :bignum)) x)
     (make-wide :elements (le-elements<- x :size 8 :bits +element-bits+)))
-  (:method ((tag (eql :cons)) (x env))
+  (:method ((tag (eql :env)) (x (eql 'nil-env)))
+    (widen 0))
+  (:method ((tag (eql :env)) (x env))
     (let ((env-key (intern-wide-ptr (env-key x)))
 	  (env-value (intern-wide-ptr (env-value x))))
       (hash (wide-ptr-tag env-key)
@@ -159,7 +167,7 @@
             (wide-ptr-value env-value)
 	    (etypecase (env-next-env x)
               (env (wide-ptr-value (intern-wide-ptr (env-next-env x))))
-              (null (widen 0))))))
+              (symbol (widen 0))))))
   (:method ((tag (eql :thunk)) x)
     (let ((body (intern-wide-ptr (thunk-body x)))
           (closed-env (intern-wide-ptr (thunk-closed-env x))))
@@ -207,14 +215,15 @@
         (unhash w 5)
         (fun (expr<-wide-ptr-parts args-tag args-value)
              (expr<-wide-ptr-parts body-tag body-value)
-             (expr<-wide-ptr-parts (tag-value :cons) env-value))))
+             (expr<-wide-ptr-parts (tag-value :env) env-value))))
   (:method ((tag (eql :env)) (w wide))
-            (destructuring-bind (key-tag key-value val-tag val-value next-env)
-        (unhash w 5)
-      (env (expr<-wide key-tag key-value)
-           (expr<-wide-ptr-parts val-tag val-value)
-           (unless (wide-zero-p next-env)
-             (expr<-wide :env next-env)))))
+    (if (wide-zero-p w)
+	'nil-env
+	(destructuring-bind (key-tag key-value val-tag val-value next-env)
+            (unhash w 5)
+	  (env (expr<-wide-ptr-parts key-tag key-value)
+               (expr<-wide-ptr-parts val-tag val-value)
+               (expr<-wide :env next-env)))))
   (:method ((tag (eql :str)) (w wide))
     (with-output-to-string (out)
       (loop while (not (wide-zero-p w))
@@ -318,7 +327,7 @@
                            (wide 3232492942 3172902725 3905286198 3869388357
 				 3770444062 3474609343 2951998298 4004311820))
             (intern-wide-ptr `(foo (bar 1) (:baz #\x "monkey") ,(num 123) ,(1- (expt 2 256))))))
-    #+nil(let* ((env1 (env 'a 123 nil))
+    (let* ((env1 (env 'a 123 'nil-env))
            (env2 (env 'b :xxx env1)))
       (is (== (make-wide-ptr (tag-value :env)
                              (wide 2064456524 2837991327 1206943432 1993810858
@@ -351,14 +360,16 @@
       (test-roundtrip 'a)
       (test-roundtrip :mango)
       ;; TODO: Revert back after restoring :env changes
-      #+nil(let* ((env1 (env 'a 123 nil))
+      (let* ((env0 'nil-env)
+	     (env1 (env 'a 123 env0))
              (env2 (env 'b "xxx" env1)))
+        (test-roundtrip env0)
         (test-roundtrip env1)
         (test-roundtrip env2)
         (test-roundtrip (thunk '(give up the thunk) '((b . "xxx") (a . 123))))
         )
       (test-roundtrip "roundtrip")
       (test-roundtrip (comm 0 123))
-      (test-roundtrip (fun '(a b c) '(+ a (* b c)) '((x . 1))))
+      (test-roundtrip (fun '(a b c) '(+ a (* b c)) (env 'x 1 'nil-env)))
       (test-roundtrip 'lurk:lambda)
       (test-roundtrip '('lurk:cons 1 2)))))
