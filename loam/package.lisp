@@ -66,7 +66,7 @@
 (defpackage evaluation
   (:use #:common-lisp)
   (:import-from #:base #:todo #:compose)
-  (:import-from #:macros #:display #:awhen #:it)
+  (:import-from #:macros #:display #:awhen #:it #:symbolconc)
   (:import-from #:it.bese.FiveAm #:def-suite #:def-suite* #:in-suite #:test #:is #:run! #:signals #:finishes #:skip)
   (:import-from #:defstar #:defun* #:defmethod* #:defgeneric* #:->)
   (:import-from #:lattice #:dual #:dual-value #:defdual #:with-duals)

@@ -68,10 +68,6 @@
   )
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  ;; TODO: Any better way to do this?
-  (defun concat-sym (root suf)
-    (intern (format nil "~A~A" root suf)))
-
   ;; Generate a full memory.
   ;; In the config, the :tag spec indicates a possible explicit tag that should be optimized away,
   ;; and the macro will automatically handle these cases and insert the correct tag accordingly.
@@ -89,8 +85,8 @@
 	   egress-forms)
 	(loop for arg-spec in arg-specs
 	      for arg = (getf arg-spec :arg)
-	      for arg-tag = (concat-sym arg '-tag)
-	      for arg-value = (concat-sym arg '-value)
+	      for arg-tag = (symbolconc arg '-tag)
+	      for arg-value = (symbolconc arg '-value)
 	      for type = (getf arg-spec :type)
 	      for explicit-tag = (getf arg-spec :tag)
 	      for tag-check-form = (if explicit-tag
@@ -129,11 +125,11 @@
 	     (tag (getf config :tag))
 	     (initial-addr (getf config :initial-addr))
 	     (hasher (getf config :hasher))
-	     (name-rel (concat-sym name '-rel))
-	     (name-digest-mem (concat-sym name '-digest-mem))
-	     (name-mem (concat-sym name '-mem))
-	     (hash-rel (concat-sym hasher '-rel))
-	     (unhasher (concat-sym 'un hasher))
+	     (name-rel (symbolconc name '-rel))
+	     (name-digest-mem (symbolconc name '-digest-mem))
+	     (name-mem (symbolconc name '-mem))
+	     (hash-rel (symbolconc hasher '-rel))
+	     (unhasher (symbolconc 'un hasher))
 	     )
 	`(progn
 	   (defprogram ,prog-name ,superclasses
@@ -203,7 +199,7 @@
     (let* ((name (getf config :name))
 	   (tag (getf config :tag))
 	   (initial-addr (getf config :initial-addr))
-	   (digest-mem (concat-sym name '-digest-mem))
+	   (digest-mem (symbolconc name '-digest-mem))
 	  )
      `(progn
        (defprogram ,prog-name ,superclasses
