@@ -1,4 +1,4 @@
-(declaim (optimize safety))64;84;34M;22M
+(declaim (optimize safety))
 
 (in-package #:evaluation)
 (def-suite* evaluation-suite :in loam:master-suite)
@@ -47,166 +47,227 @@
   ;; Construct output-expr from output-ptr
   (rule (output-expr (make-wide-ptr (widen (ptr-tag ptr)) value)) <--
     (output-ptr ptr)
-    (ptr-value ptr value)
-    #+nil(let ((x (prog-trace 'output-expr ptr))))))
+    (ptr-value ptr value)))
 
 ;; hash-cache takes precedence over program in superclass list
 (defprogram hash4 (hash-cache)
   (include ptr-program)
-  (relation (hash4 wide wide wide wide)) ; (a b c d)
-  (relation (unhash4 wide)) ; (digest)
+  (relation (hash4 element wide wide wide wide)) ; (tag a b c d)
+  (relation (unhash4 element wide)) ; (tag digest)
   (relation (hash4-rel wide wide wide wide wide)) ; (a b c d digest)
-  
-  ;; signal
-  (rule (alloc (wide-nth 0 a-tag) a-value) (alloc (wide-nth 0 b-tag) b-value) <--
-    (unhash4 digest)
-    (hash4-rel a-tag a-value b-tag b-value digest)))
+
+  )
 
 ;; hash-cache takes precedence over program in superclass list
 (defprogram hash5 (hash-cache)
   (include ptr-program)
-  (relation (hash5 wide wide wide wide wide)) ; (a b c d e)
-  (relation (unhash5 wide)) ; (digest)
+  (relation (hash5 element wide wide wide wide wide)) ; (tag a b c d e)
+  (relation (unhash5 element wide)) ; (tag digest)
   (relation (hash5-rel wide wide wide wide wide wide)) ; (a b c d e digest)
   
-  ;; signal
-  ;; FIXME: We assume that the c-tag must be a :cons.
-  (rule (alloc (wide-nth 0 a-tag) a-value) (alloc (wide-nth 0 b-tag) b-value) (alloc (tag-address :cons) c-value) <--
-    (unhash5 digest)
-    (hash5-rel a-tag a-value b-tag b-value c-value digest)))
+  )
 
-(defprogram cons-mem (hash-cache)
-  (include ptr-program)
-  (include hash4)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  ;; Generate a full memory.
+  ;; In the config, the :tag spec indicates a possible explicit tag that should be optimized away,
+  ;; and the macro will automatically handle these cases and insert the correct tag accordingly.
+  ;; For example, for env memory, which consists of (var val inner-env),
+  ;; the tag of inner-env is assumed to always be :env, and can be dropped. 
+  (defun defmem-full (prog-name superclasses config arg-specs)
+    (multiple-value-bind
+	  (signal-args
+	   signal-type-args
+	   digest<-mem-forms
+	   mem<-digest-forms
+	   hash-args
+	   unhash-args
+	   alloc-forms
+	   egress-forms)
+	(loop for arg-spec in arg-specs
+	      for arg = (getf arg-spec :arg)
+	      for arg-tag = (symbolconc arg '-tag)
+	      for arg-value = (symbolconc arg '-value)
+	      for type = (getf arg-spec :type)
+	      for explicit-tag = (getf arg-spec :tag)
+	      for tag-check-form = (if explicit-tag
+				       `(when (== (ptr-tag ,arg) (tag-address ,explicit-tag)))
+				       `(when (== (ptr-tag ,arg) (wide-nth 0 ,arg-tag))))
+	      ;; Collect each form of syntax that we need to use when generating the rules.
+	      ;; Depending on whether we have an explicit tag or not, we have to either check
+	      ;; for the given tag, or insert the given tag. 
+	      collect arg into signal-args
+	      collect type into signal-type-args
+	      collect `(ptr-value ,arg ,arg-value) into digest<-mem-forms
+	      when explicit-tag
+		collect tag-check-form into digest<-mem-forms
+	      collect `(ptr-value ,arg ,arg-value) into mem<-digest-forms
+	      collect tag-check-form into mem<-digest-forms
+	      when (not explicit-tag)
+		collect `(widen (ptr-tag ,arg)) into hash-args
+		and collect arg-tag into unhash-args
+	      collect arg-value into hash-args
+	      collect arg-value into unhash-args
+	      collect (if explicit-tag
+			  `(alloc (tag-address ,explicit-tag) ,arg-value)
+			  `(alloc (wide-nth 0 ,arg-tag) ,arg-value))
+		into alloc-forms
+	      collect `(egress ,arg) into egress-forms
+	      finally (return (values
+			       signal-args
+			       signal-type-args
+			       digest<-mem-forms
+			       mem<-digest-forms
+			       hash-args
+			       unhash-args
+			       alloc-forms
+			       egress-forms)))
+      (let* ((name (getf config :name))
+	     (tag (getf config :tag))
+	     (initial-addr (getf config :initial-addr))
+	     (hasher (getf config :hasher))
+	     (name-rel (symbolconc name '-rel))
+	     (name-digest-mem (symbolconc name '-digest-mem))
+	     (name-mem (symbolconc name '-mem))
+	     (hash-rel (symbolconc hasher '-rel))
+	     (unhasher (symbolconc 'un hasher))
+	     )
+	`(progn
+	   (defprogram ,prog-name ,superclasses
+	     (include ptr-program)
+	     (include ,hasher)
+	     
+	     ;; Signal.
+	     (relation (,name ,@signal-type-args))
+	     ;; The canonical `name` Ptr relation.
+	     (relation (,name-rel ,@signal-type-args ptr))
 
-  ;; The following relations could be determined by something like:
-  ;; (constructor cons (:cons 0 hash4) (car ptr) (cdr ptr))
-  ; signal
-  (relation (cons ptr ptr)) ; (car cdr)
+	     ;; Memory to support data  allocated by digest or contents.
+	     (lattice (,name-digest-mem wide dual-element)) ; (digest addr)
+	     (lattice (,name-mem ,@signal-type-args dual-element)) ; (args addr)
 
-  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-  ;;; Memory
+	     ;; Populating alloc(...) triggers allocation in cons-digest-mem.
+	     (rule (,name-digest-mem ,'value  (alloc ,tag (dual ,initial-addr))) <--
+	       (alloc (tag-address ,tag) ,'value))
 
-  ;; The canonical cons Ptr relation.
-  (relation (cons-rel ptr ptr ptr)) ; (car cdr cons)
+	     ;; Populating `name`(...) triggers allocation in name-mem.
+	     (rule (,name-mem ,@signal-args (alloc ,tag (dual ,initial-addr))) <-- (,name ,@signal-args))
+	     
+	     ;; Populate name-digest-mem if a name in cons-mem has been hashed in hash4-rel.
+	     (rule (,name-digest-mem digest addr) <--
+	       (,name-mem ,@signal-args addr)
+	       ,@digest<-mem-forms
+	       (,hash-rel ,@hash-args digest))
 
-  ;; Memory to support conses allocated by digest or contents.
-  (lattice (cons-digest-mem wide dual-element)) ; (digest addr)
-  (lattice (cons-mem ptr ptr dual-element)) ; (car cdr addr)
+	     ;; Other way around.
+	     (rule (,name-mem ,@signal-args addr) <--
+	       (,name-digest-mem digest addr)
+	       (,hash-rel ,@unhash-args digest)
+	       ,@mem<-digest-forms)
 
-  ;; Populating alloc(...) triggers allocation in cons-digest-mem.
-  (rule (cons-digest-mem value  (alloc :cons (dual 0))) <--
-    (alloc (tag-address :cons) value))
+	     ;; Register a memory value.
+	     (rule (ptr-value ,name value) <--
+	       (,name-digest-mem value addr) (let ((,name (ptr ,tag (dual-value addr))))))
 
-  ;; Populating cons(...) triggers allocation in cons-mem.
-  (rule (cons-mem car cdr (alloc :cons (dual 0))) <-- (cons car cdr))
+	     ;; Register a memory relation.
+	     (rule (,name-rel ,@signal-args ,name) <--
+	       (,name-mem ,@signal-args addr)
+	       (let ((,name (ptr ,tag (dual-value addr))))))
 
-  ;; Populate cons-digest-mem if a cons in cons-mem has been hashed in hash4-rel.
-  (rule (cons-digest-mem digest addr) <--
-    (cons-mem car cdr addr)
-    (ptr-value car car-value) (ptr-value cdr cdr-value)
-    (hash4-rel (widen (ptr-tag car)) car-value (widen (ptr-tag cdr)) cdr-value digest))
+	     ;; signal
+	     (rule (,unhasher (tag-address ,tag) digest) <--
+	       (ingress ptr) (when (has-tag-p ptr ,tag)) (ptr-value ptr digest))
 
-  ;; Other way around.
-  (rule (cons-mem car cdr addr) <--
-    (cons-digest-mem digest addr)
-    (hash4-rel car-tag car-value cdr-tag cdr-value digest)
-    (ptr-value car car-value) (ptr-value cdr cdr-value)
-    (when (and (== (ptr-tag car) (wide-nth 0 car-tag))
-	       (== (ptr-tag cdr) (wide-nth 0 cdr-tag)))))
+	     ;; signal
+	     (rule ,@alloc-forms <--
+	       (,unhasher (tag-address ,tag) digest)
+	       (,hash-rel ,@unhash-args digest))
 
-  ;; Register a cons value.
-  (rule (ptr-value cons value) <--
-    (cons-digest-mem value addr) (let ((cons (ptr :cons (dual-value addr))))))
+	     ;; signal
+	     (rule (,hasher (tag-address ,tag) ,@hash-args) <--
+	       (egress ,name)
+	       (,name-rel ,@signal-args ,name)
+	       ,@digest<-mem-forms)
 
-  ;; Register a cons relation.
-  (rule (cons-rel car cdr cons) <--
-    (cons-mem car cdr addr)
-    (let ((cons (ptr :cons (dual-value addr))))))
+	     ;; signal
+	     (rule ,@egress-forms <--
+	       (egress ,name) (,name-rel ,@signal-args ,name))
+	     )))))
 
-  ;; signal
-  (rule (unhash4 digest) <--
-    (ingress ptr) (when (has-tag-p ptr :cons)) (ptr-value ptr digest))
+  ;; Digest only memory. FIXME: Need to define this.
+  ;; Example: sym, builtin.
+  (defun defmem-digest-only (prog-name superclasses config)
+    (let* ((name (getf config :name))
+	   (tag (getf config :tag))
+	   (initial-addr (getf config :initial-addr))
+	   (digest-mem (symbolconc name '-digest-mem))
+	  )
+     `(progn
+       (defprogram ,prog-name ,superclasses
+	 (include ptr-program) ;; TODO: Maybe this should not be hardcoded.
 
-  ;; signal
-  (rule (hash4 car-tag car-value cdr-tag cdr-value) <--
-    (egress cons)
-    (cons-rel car cdr cons)
-    (let ((car-tag (widen (ptr-tag car)))
-	  (cdr-tag (widen (ptr-tag cdr)))))
-    (ptr-value car car-value) (ptr-value cdr cdr-value)
-    #+nil(let ((x (prog-trace 'hash4-cons car-tag car-value cdr-tag cdr-value))))
-    )
+	 (relation (,digest-mem wide dual-element))
 
-  ;; signal
-  (rule (egress car) (egress cdr) <--
-    (egress cons) (cons-rel car cdr cons)))
+	 (rule (,digest-mem value (alloc ,tag (dual ,initial-addr))) <--
+	   (alloc (tag-address ,tag) value))
+	 
+	 (rule (ptr-value ,name value) <--
+	   (,digest-mem value addr) (let ((,name (ptr ,tag (dual-value addr))))))))))
 
-;; FIXME: Align with Lurk by dropping closed-env-tag in the hash.
-(defprogram thunk-mem (hash-cache)
-  (include ptr-program)
-  (include hash4)
+  ;; Immediate memory, for which the pointer value can be represented by exactly the wide value.
+  ;; Thus, instead of allocating memory and managing ptr-value mappings, we can just translate
+  ;; directly when ingressing and egressing.
+  ;;
+  ;; Examples: num, err
+  (defun defmem-immediate (prog-name superclasses config)
+    (let ((name (getf config :name))
+	  (tag (getf config :tag)))
+     `(progn
+       (defprogram ,prog-name ,superclasses
+	 (include ptr-program) ;; TODO: Maybe this should not be hardcoded.
 
-  ; signal
-  (relation (thunk ptr ptr)) ; (body closed-env)
+	 ;; When ingressing (a.k.a alloc), just copy the wide value into the ptr.
+	 (rule (ptr-value ptr value) <--
+	   (alloc tag value)
+	   (when (is-tag-p tag ,tag))
+	   (let ((ptr (ptr ,tag (wide-nth 0 value))))))
 
-  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-  ;;; Memory
+	 ;; When egressing, just copy the ptr vale into the wide.
+	 (rule (ptr-value ptr value) <--
+	   (egress ptr)
+	   (when (has-tag-p ptr ,tag))
+	   (let ((value (widen (ptr-value ptr))))))))))
+  )
 
-  ;; The canonical thunk Ptr relation.
-  (relation (thunk-rel ptr ptr ptr)) ; (body closed-env thunk)
+;; FIXME: Annoyingly, I have to copy this over to get the macro expansion to work.
+;; When importing, we end up using the symbols shadowed under the allocation package,
+;; for example `allocation::ingress`, and this interferes with execution.
+;; There should definitely be a way to prevent this from happening in the first place,
+;; but I haven't been able to get anything to work.
+;;
+;; Generate a memory program from a given config of (:type :name :tag :initial-addr :hasher)
+;; and a list of specifications for each argument given by (:arg :type :tag).
+;; The :type spec indicates which type of memory should be generated.
+(defmacro defmem (prog-name superclasses config &body arg-specs)
+  (case (getf config :type)
+    (full (defmem-full prog-name `,superclasses `,config `,arg-specs))
+    (digest-only (defmem-digest-only `,prog-name `,superclasses `,config))
+    (immediate (defmem-immediate `,prog-name `,superclasses `,config))))
 
-  ;; Memory to support thunks allocated by digest or contents.
-  (lattice (thunk-digest-mem wide dual-element)) ; (digest addr)
-  (lattice (thunk-mem ptr ptr dual-element)) ; (body closed-env addr)
+(defmem cons-mem (hash-cache)
+    (:type full :name cons :tag :cons :initial-addr 0 :hasher hash4)
+  (:arg car :type ptr)
+  (:arg cdr :type ptr))
 
-  ;; Populating alloc(...) triggers allocation in thunk-digest-mem.
-  (rule (thunk-digest-mem value  (alloc :thunk (dual 0))) <--
-    (alloc (tag-address :thunk) value))
+(defmem thunk-mem (hash-cache)
+    (:type full :name thunk :tag :thunk :initial-addr 0 :hasher hash4)
+  (:arg body :type ptr)
+  (:arg closed-env :type ptr))
 
-  ;; Populating thunk(...) triggers allocation in thunk-mem.
-  (rule (thunk-mem body closed-env (alloc :thunk (dual 0))) <-- (thunk body closed-env))
-
-  ;; Populate thunk-digest-mem if a thunk in thunk-mem has been hashed in hash4-rel.
-  (rule (thunk-digest-mem digest addr) <--
-    (thunk-mem body closed-env addr)
-    (ptr-value body body-value) (ptr-value closed-env closed-env-value)
-    (hash4-rel (widen (ptr-tag body)) body-value (widen (ptr-tag closed-env)) closed-env-value digest))
-
-  ;; Other way around.
-  (rule (thunk-mem body closed-env addr) <--
-    (thunk-digest-mem digest addr)
-    (hash4-rel body-tag body-value closed-env-tag closed-env-value digest)
-    (ptr-value body body-value) (ptr-value closed-env closed-env-value)
-    (when (and (== (ptr-tag body) (wide-nth 0 body-tag))
-	       (== (ptr-tag closed-env) (wide-nth 0 closed-env-tag)))))
-
-  ;; Register a thunk value.
-  (rule (ptr-value thunk value) <--
-    (thunk-digest-mem value addr) (let ((thunk (ptr :thunk (dual-value addr))))))
-
-  ;; Register a thunk relation.
-  (rule (thunk-rel body closed-env thunk) <--
-    (thunk-mem body closed-env addr)
-    (let ((thunk (ptr :thunk (dual-value addr))))))
-
-  ;; signal
-  (rule (unhash4 digest) <--
-    (ingress ptr) (when (has-tag-p ptr :thunk)) (ptr-value ptr digest))
-
-  ;; signal
-  (rule (hash4 body-tag body-value closed-env-tag closed-env-value) <--
-    (egress thunk)
-    (thunk-rel body closed-env thunk)
-    (let ((body-tag (widen (ptr-tag body)))
-	  (closed-env-tag (widen (ptr-tag closed-env)))))
-    (ptr-value body body-value) (ptr-value closed-env closed-env-value)))
-
-(defprogram fun-mem (hash-cache)
+(defprogram syn-fun-mem (hash-cache)
   (include ptr-program)
   (include hash5)
 
-  ; signal
+  ;; signal
   (relation (fun ptr ptr ptr)) ; (args body closed-env)
 
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -225,13 +286,15 @@
 
   ;; Populating fun(...) triggers allocation in fun-mem.
   (rule (fun-mem args body closed-env (alloc :fun (dual 0))) <--
-    (fun args body closed-env)
-    )
+    (fun args body closed-env))
 
   ;; Populate fun-digest-mem if a fun in fun-mem has been hashed in hash5-rel.
   (rule (fun-digest-mem digest addr) <--
     (fun-mem args body closed-env addr)
-    (ptr-value args args-value) (ptr-value body body-value) (ptr-value closed-env closed-env-value)
+    (ptr-value args args-value)
+    (ptr-value body body-value)
+    (ptr-value closed-env closed-env-value)
+    (when (== (ptr-tag closed-env) (tag-address :env)))
     (hash5-rel (widen (ptr-tag args)) args-value (widen (ptr-tag body)) body-value closed-env-value digest))
 
   ;; Other way around.
@@ -239,25 +302,23 @@
     (fun-digest-mem digest addr)
     (hash5-rel args-tag args-value body-tag body-value closed-env-value digest)
     (ptr-value args args-value)
+    (when (== (ptr-tag args) (wide-nth 0 args-tag)))
     (ptr-value body body-value)
+    (when (== (ptr-tag body) (wide-nth 0 body-tag)))
     (ptr-value closed-env closed-env-value)
-    (when (and (== (ptr-tag args) (wide-nth 0 args-tag))
-	       (== (ptr-tag body) (wide-nth 0 body-tag))
-	       (== (ptr-tag closed-env) (tag-address :env))
-	       )))
+    (when (== (ptr-tag closed-env) (tag-address :env))))
 
   ;; Register a fun value.
   (rule (ptr-value fun value) <--
-    (fun-digest-mem value addr) (let ((fun (ptr :fun (dual-value addr)))))
-    #+nil(let ((x (prog-trace 'fun-ptr-value)))))
-
+    (fun-digest-mem value addr) (let ((fun (ptr :fun (dual-value addr))))))
+  
   ;; Register a fun relation.
   (rule (fun-rel args body closed-env fun) <--
     (fun-mem args body closed-env addr)
     (let ((fun (ptr :fun (dual-value addr))))))
 
   ;; signal
-  (rule (unhash5 digest) <--
+  (rule (unhash5 (tag-address :fun) digest) <--
     (ingress ptr) (when (has-tag-p ptr :fun)) (ptr-value ptr digest))
   
   ;; signal
@@ -280,105 +341,32 @@
     <--
     (egress fun)
     (fun-rel args body closed-env fun)
-    (let ((args-tag (widen (ptr-tag args)))
-	  (body-tag (widen (ptr-tag body)))))
     (ptr-value args args-value)
     (ptr-value body body-value)
-    (ptr-value closed-env closed-env-value))
+    (ptr-value closed-env closed-env-value)
+    (when (== (ptr-tag closed-env) (tag-address :env))))
 
   ;; signal
   (rule (egress args) (egress body) (egress closed-env) <--
     (egress fun) (fun-rel args body closed-env fun)))
 
+(defmem fun-mem (hash-cache)
+    (:type full :name fun :tag :fun :initial-addr 0 :hasher hash5)
+  (:arg args :type ptr)
+  (:arg body :type ptr)
+  (:arg closed-env :type ptr :tag :env))
+
 (defparameter *initial-env-addr* 1)
 
-(defprogram env-mem (hash-cache)
-  (include ptr-program)
-  (include hash5)
-
-  ;; signal
-  (relation (env ptr ptr ptr)) ; (var val inner-env)
-
-  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-  ;;; Memory
-
-  ;; The canonical env Ptr relation.
-  (relation (env-rel ptr ptr ptr ptr)) ; (var val inner-env env)
-
-  ;; Memory to support funs allocated by digest or contents.
-  (lattice (env-digest-mem wide dual-element)) ; (digest addr)
-  (lattice (env-mem ptr ptr ptr dual-element)) ; (var val inner-env addr)
-
-  ;; Populating alloc(...) triggers allocation in env-digest-mem.
-  (rule (env-digest-mem value (alloc :env (dual *initial-env-addr*))) <--
-    (alloc (tag-address :env) value))
-
-  ;; Populating env(...) triggers allocation in env-mem.
-  (rule (env-mem var val inner-env (alloc :env (dual *initial-env-addr*))) <--
-    (env var val inner-env))
-
-  ;; Populate env-digest-mem if a env in env-mem has been hashed in hash5-rel.
-  (rule (env-digest-mem digest addr) <--
-    (env-mem var val inner-env addr)
-    (ptr-value var var-value) (ptr-value val val-value) (ptr-value inner-env inner-env-value)
-    (hash5-rel (widen (ptr-tag var)) var-value (widen (ptr-tag val)) val-value inner-env-value digest))
-
-  ;; Other way around.
-  (rule (env-mem var val inner-env addr) <--
-    (env-digest-mem digest addr)
-    (hash5-rel var-tag var-value val-tag val-value inner-env-value digest)
-    (ptr-value var var-value)
-    (ptr-value val val-value)
-    (ptr-value inner-env inner-env-value)
-    (when (and (== (ptr-tag var) (wide-nth 0 var-tag))
-	       (== (ptr-tag val) (wide-nth 0 val-tag))
-	       (== (ptr-tag inner-env) (tag-address :env))
-	       )))
-
-  ;; Register a env value.
-  (rule (ptr-value env value) <--
-    (env-digest-mem value addr) (let ((env (ptr :env (dual-value addr))))))
-  
-  ;; Register a env relation.
-  (rule (env-rel var val inner-env env) <--
-    (env-mem var val inner-env addr)
-    (let ((env (ptr :env (dual-value addr))))))
-
-  ;; signal
-  (rule (unhash5 (tag-address :env) digest) <--
-    (ingress ptr) (when (has-tag-p ptr :env)) (ptr-value ptr digest))
-  
-  ;; signal
-  (rule
-    (alloc (wide-nth 0 var-tag) var-value)
-    (alloc (wide-nth 0 val-tag) val-value)
-    (alloc (tag-address :env) inner-env-value)
-    <--
-    (unhash5 (tag-address :env) digest)
-    (hash5-rel var-tag var-value val-tag val-value inner-env-value digest))
-
-  ;; signal
-  (rule
-    (hash5 (tag-address :env)
-	   (widen (ptr-tag var))
-	   var-value
-	   (widen (ptr-tag val))
-	   val-value
-	   inner-env-value)
-    <--
-    (egress fun)
-    (env-rel var val inner-env env)
-    (ptr-value var var-value)
-    (ptr-value val val-value)
-    (ptr-value inner-env inner-env-value))
-
-  ;; signal
-  (rule (egress var) (egress val) (egress inner-env) <--
-    (egress env) (env-rel var val inner-env env)))
+(defmem env-mem (hash-cache)
+    (:type full :name env :tag :env :initial-addr *initial-env-addr* :hasher hash5)
+  (:arg var :type ptr)
+  (:arg val :type ptr)
+  (:arg inner-env :type ptr :tag :env))
 
 (defparameter *initial-sym-addr* 2)
 
-(defprogram sym-mem ()
+(defprogram syn-sym-digest-mem ()
   (include ptr-program)
 
   (lattice (sym-digest-mem wide dual-element))
@@ -389,39 +377,53 @@
 
   ;; Register a sym value.
   (rule (ptr-value sym value) <--
-    (sym-digest-mem value addr) (let ((sym (ptr :sym (dual-value addr)))))
-    #+nil(let ((x (prog-trace 'sym-ptr-value sym addr))))))
+    (sym-digest-mem value addr) (let ((sym (ptr :sym (dual-value addr)))))))
+
+(defmem sym-digest-mem ()
+    (:type digest-only
+     :name sym
+     :tag :sym
+     :initial-addr *initial-sym-addr*)
+  nil)
 
 (defparameter *initial-builtin-addr* 41)
 
-(defprogram builtin-mem (hash-cache)
+(defprogram syn-builtin-digest-mem (hash-cache)
   (include ptr-program)
 
   (lattice (builtin-digest-mem wide dual-element))
 
   ;; Populating alloc(...) triggers allocation in builtin-digest-mem.
-  #+nil
   (rule (builtin-digest-mem value (alloc :builtin (dual *initial-builtin-addr*))) <--
-    (alloc (tag-address :builtin) value)
-    (let ((x (prog-trace 'fire-this-rule)))))
+    (alloc (tag-address :builtin) value))
 
   ;; Register a builtin value.
   (rule (ptr-value builtin value) <--
-    (builtin-digest-mem value addr) (let ((builtin (ptr :builtin (dual-value addr)))))
-    ))
+    (builtin-digest-mem value addr) (let ((builtin (ptr :builtin (dual-value addr)))))))
 
-(defprogram immediate-num ()
+(defmem builtin-digest-mem (hash-cache)
+  (:type digest-only
+   :name builtin
+   :tag :builtin
+   :initial-addr *initial-builtin-addr*))
+
+
+(defprogram syn-immediate-num ()
   (include ptr-program)
   ;; real
   (rule (ptr-value ptr value) <--
-    (alloc tag value)
-    (when (is-tag-p tag :num))
-    (let ((ptr (ptr :num (wide-nth 0 value)))))
-    )
+	(alloc tag value)
+	(when (is-tag-p tag :num))
+	(let ((ptr (ptr :num (wide-nth 0 value))))))
 
   (rule (ptr-value ptr value) <--
-    (egress ptr) (when (has-tag-p ptr :num))
-    (let ((value (widen (ptr-value ptr)))))))
+	(egress ptr) (when (has-tag-p ptr :num))
+	(let ((value (widen (ptr-value ptr)))))))
+
+(defmem immediate-num ()
+  (:type immediate
+   :name num
+   :tag :num))
 
 ;; FIXME for PQ: This is a hack for binding a value in a relation.
 ;; When I just write a '0', I get something like: 'etypecase failed, expected one of SYMBOL or DATALOG:VAL-FORM'.
@@ -434,8 +436,8 @@
   (include thunk-mem)
   (include fun-mem)
   (include env-mem)
-  (include sym-mem)
-  (include builtin-mem)
+  (include sym-digest-mem)
+  (include builtin-digest-mem)
   (include immediate-num)
 
   ;; Generate the necessary signal relations
@@ -464,8 +466,8 @@
   (relation (fold-left ptr ptr element ptr element))
   #+nil
   (signal-relation (signal-fold-left (env op initial args result)
-		    (fold-left-input env op initial args)
-		    (fold-left env op initial args result)))
+				     (fold-left-input env op initial args)
+				     (fold-left env op initial args result)))
 
   (relation (eval-binop-input ptr ptr ptr)) ; (env op args)
   (relation (eval-binop ptr ptr ptr element))
@@ -497,7 +499,7 @@
 		    (fun-rel args body closed-env fun)))
   (signal-relation (signal-fun (args body closed-env fun)
 		    (fun args body closed-env)
-                    (fun-rel args body closed-env fun)))
+		    (fun-rel args body closed-env fun)))
 
   ;; Env signals.
   (signal-relation (ingress-env (var val inner-env env)
@@ -514,23 +516,23 @@
 
   ;; signal
   (rule (hash4-rel a b c d digest) <--
-    (unhash4 digest)
+    (unhash4 _ digest)
+    (when (not (== digest (widen 0)))) ;; Edge case of 0.
     (let ((preimage (unhash digest 4))
           (a (nth 0 preimage))
           (b (nth 1 preimage))
           (c (nth 2 preimage))
           (d (nth 3 preimage))
-	  #+nil(x (prog-trace 'signal-unhash4 a b c d digest)))))
+	  )))
   
   ;; signal
-  (rule (hash4-rel a b c d digest) <--
-    (hash4 a b c d)
-    (let ((digest (hash a b c d))
-	  #+nil(x (prog-trace 'signal-hash4 a b c d digest)))))
+  (rule (hash4-rel a b c d (hash a b c d)) <--
+    (hash4 _ a b c d))
 
   ;; signal
   (rule (hash5-rel a b c d e digest) <--
-    (unhash5 digest)
+    (unhash5 _ digest)
+    (when (not (== digest (widen 0)))) ;; Edge case of 0.
     (let ((preimage (unhash digest 5))
           (a (nth 0 preimage))
           (b (nth 1 preimage))
@@ -539,7 +541,7 @@
 	  (e (nth 4 preimage)))))
 
   ;; signal
-  (rule (hash5-rel a b c d e (hash a b c d e)) <-- (hash5 a b c d e))
+  (rule (hash5-rel a b c d e (hash a b c d e)) <-- (hash5 _ a b c d e))
 
   ;; Connect eval to input/output.
   (synthesize-rule (input-output expr env evaled) <-- (signal-eval expr env evaled))
@@ -576,11 +578,11 @@
 						 ((signal-eval a env evaled)))))
 	  ;; Evaluate let/letrec.
 	  ((or (== head (builtin-ptr 'lurk:let)) (== head (builtin-ptr 'lurk:letrec)))
-	       ((ingress-cons bindings tail rest)
-		(ingress-cons body end tail)
-		(when (is-nil end))
-		(signal-eval-bindings bindings env (== head (builtin-ptr 'lurk:letrec)) extended-env)
-		(signal-eval body extended-env evaled)))
+	   ((ingress-cons bindings tail rest)
+	    (ingress-cons body end tail)
+	    (when (is-nil end))
+	    (signal-eval-bindings bindings env (== head (builtin-ptr 'lurk:letrec)) extended-env)
+	    (signal-eval body extended-env evaled)))
 	  ;; Evaluate lambda.
 	  ((== head (builtin-ptr 'lurk:lambda)) ((ingress-cons args tail rest)
 						 (ingress-cons body end tail)
@@ -651,7 +653,7 @@
     (when (and (has-tag-p evaled1 :num) (has-tag-p evaled2 :num)))
     (let ((result (eval-binop op evaled1 evaled2))))
     )
-    
+  
 
   #+nil
   (synthesize-rule (signal-fold-left env op initial args result) <--
@@ -725,9 +727,14 @@
   (let ((x (find-relation program relation)))
     (display relation (relation-tuple-list x))))
 
+(test mem-spec
+  (is (compare-spec 'fun-mem 'syn-fun-mem))
+  (is (compare-spec 'sym-digest-mem 'syn-sym-digest-mem))
+  (is (compare-spec 'immediate-num 'syn-immediate-num)))
+
 ;; Smoke test for catching regressions on the builtin issue.
 (test intern-builtin
-  (let* ((program (make-program-instance 'builtin-mem))
+  (let* ((program (make-program-instance 'builtin-digest-mem))
 	 (*program* program)
 	 ; (src (spec (find-prototype 'builtin-mem)))
    )
@@ -740,7 +747,7 @@
 	 (*program* program)
 	 ; (src (spec (find-prototype 'evaluation)))
 	 )
-    ; (display 'src src)
+					; (display 'src src)
     (init program `(toplevel-input ((,(intern-wide-ptr input) ,(intern-wide-ptr env)))
 				   env-digest-mem ,(initial-env-digest-mem)
 				   sym-digest-mem ,(initial-sym-digest-mem)
@@ -774,32 +781,32 @@
     (is (== `((,(intern-wide-ptr expected-output))) (relation-tuple-list (find-relation program 'output-expr))))))
 
 (test self-evaluating-num
-  (test-aux (num 123) 'nil-env (num 123)))
+  (test-aux (num 123) 'lurk:nil-env (num 123)))
 
 (test self-evaluating-nil
-  (test-aux nil 'nil-env nil))
+  (test-aux nil 'lurk:nil-env nil))
 
 (test self-evaluating-t
-  (test-aux t 'nil-env t))
+  (test-aux t 'lurk:nil-env t))
 
 ;; TODO: Restore with variadic ops
 #+nil
 (test zero-arg-addition
-  (test-aux '(lurk:+) 'nil-env (num 0)))
+  (test-aux '(lurk:+) 'lurk:nil-env (num 0)))
 
 ;; TODO: Restore with variadic ops
 #+nil
 (test one-arg-addition
-  (test-aux `(lurk:+ ,(num 1)) 'nil-env (num 1)))
+  (test-aux `(lurk:+ ,(num 1)) 'lurk:nil-env (num 1)))
 
 (test two-arg-addition
-  (test-aux `(lurk:+ ,(num 1) ,(num 2)) 'nil-env (num 3)))
+  (test-aux `(lurk:+ ,(num 1) ,(num 2)) 'lurk:nil-env (num 3)))
 
 (test two-arg-subtraction
-  (test-aux `(lurk:- ,(num 3) ,(num 1)) 'nil-env (num 2)))
+  (test-aux `(lurk:- ,(num 3) ,(num 1)) 'lurk:nil-env (num 2)))
 
 (test two-arg-multiplication
-  (test-aux `(lurk:* ,(num 3) ,(num 4)) 'nil-env (num 12)))
+  (test-aux `(lurk:* ,(num 3) ,(num 4)) 'lurk:nil-env (num 12)))
 
 ;; TODO: Restore with variadic ops
 #+nil
@@ -807,43 +814,43 @@
   (test-aux `(lurk:+ ,(num 1) ,(num 2) ,(num 3)) 'nil-env (num 6)))
 
 (test eq-t
-  (test-aux `(lurk:= ,(num 1) ,(num 1)) 'nil-env t))
+  (test-aux `(lurk:= ,(num 1) ,(num 1)) 'lurk:nil-env t))
 
 (test eq-nil
-  (test-aux `(lurk:= ,(num 1) ,(num 2)) 'nil-env nil))
+  (test-aux `(lurk:= ,(num 1) ,(num 2)) 'lurk:nil-env nil))
 
 (test leq-t
-  (test-aux `(lurk:< ,(num 1) ,(num 2)) 'nil-env t))
+  (test-aux `(lurk:< ,(num 1) ,(num 2)) 'lurk:nil-env t))
 
 (test leq-nil
-  (test-aux `(lurk:< ,(num 1) ,(num 1)) 'nil-env nil))
+  (test-aux `(lurk:< ,(num 1) ,(num 1)) 'lurk:nil-env nil))
 
 (test geq-t
-  (test-aux `(lurk:> ,(num 2) ,(num 1)) 'nil-env t))
+  (test-aux `(lurk:> ,(num 2) ,(num 1)) 'lurk:nil-env t))
 
 (test geq-nil
-  (test-aux `(lurk:> ,(num 1) ,(num 1)) 'nil-env nil))
+  (test-aux `(lurk:> ,(num 1) ,(num 1)) 'lurk:nil-env nil))
 
 (test if-t
-  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 1)) ,(num 123) ,(num 456)) 'nil-env (num 123)))
+  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 1)) ,(num 123) ,(num 456)) 'lurk:nil-env (num 123)))
 
 (test if-nil
-  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 2)) ,(num 123) ,(num 456)) 'nil-env (num 456)))
+  (test-aux `(lurk:if (lurk:= ,(num 1) ,(num 2)) ,(num 123) ,(num 456)) 'lurk:nil-env (num 456)))
 
 (test var-lookup
-  (test-aux 'x (env 'x (num 9) 'nil-env) (num 9)))
+  (test-aux 'x (env 'x (num 9) 'lurk:nil-env) (num 9)))
 
 (test deep-var-lookup
-  (test-aux 'y (env 'x (num 9) (env 'y (num 10) 'nil-env)) (num 10)))
+  (test-aux 'y (env 'x (num 9) (env 'y (num 10) 'lurk:nil-env)) (num 10)))
 
 (test let-plain
-  (test-aux `(lurk:let ((x ,(num 1))) x) 'nil-env (num 1)))
+  (test-aux `(lurk:let ((x ,(num 1))) x) 'lurk:nil-env (num 1)))
 
 (test lambda-plain
-  (test-aux `(lurk:lambda (x) (lurk:+ x ,(num 1))) 'nil-env (fun '(x) `(lurk:+ x ,(num 1)) 'nil-env)))
+  (test-aux `(lurk:lambda (x) (lurk:+ x ,(num 1))) 'lurk:nil-env (fun '(x) `(lurk:+ x ,(num 1)) 'lurk:nil-env)))
 
 (test funcall-zero-args
-  (test-aux `((lurk:lambda () ,(num 1))) 'nil-env (num 1)))
+  (test-aux `((lurk:lambda () ,(num 1))) 'lurk:nil-env (num 1)))
 
 (test funcall-one-args
   (test-aux `((lurk:lambda (x) (lurk:+ x ,(num 1))) ,(num 1)) 'nil-env (num 2)))
@@ -851,16 +858,16 @@
 (test funcall
   (test-aux `(lurk:let ((f (lurk:lambda (x) (lurk:+ x ,(num 1)))))
 	       (f ,(num 2)))
-	    'nil-env
+	    'lurk:nil-env
 	    (num 3)))
 
 (test letrec-plain
-  (test-aux `(lurk:letrec ((x ,(num 1))) x) 'nil-env (num 1)))
+  (test-aux `(lurk:letrec ((x ,(num 1))) x) 'lurk:nil-env (num 1)))
 
 (test letrec-funcall
   (test-aux `(lurk:letrec ((f (lurk:lambda (x) (lurk:+ x ,(num 1)))))
 			  (f ,(num 2)))
-	    'nil-env
+	    'lurk:nil-env
 	    (num 3)))
 
 (test letrec-fact
@@ -869,7 +876,7 @@
 							   (lurk:* (fact (lurk:- n ,(num 1)))
 								   n)))))
 			  (fact ,(num 4)))
-	    'nil-env
+	    'lurk:nil-env
 	    (num 24)
 	    ))
 
